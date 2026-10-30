@@ -1,0 +1,40 @@
+# Fly.io konfiguratsiyasi — KPI AUDIT PRO
+# `app` nomi global yagona bo'lishi kerak; band bo'lsa `fly launch` yoki
+# `fly apps create` vaqtida boshqa nom bilan almashtiring.
+app = "kpi-audit-pro-olmosriver"
+primary_region = "fra"
+
+[build]
+
+[deploy]
+  release_command = "npx prisma migrate deploy --schema=prisma-prod/schema.prisma"
+
+[env]
+  NODE_ENV = "production"
+  PORT = "3000"
+
+[http_service]
+  internal_port = 3000
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["app"]
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"
+
+[[mounts]]
+  source = "kpi_audit_data"
+  destination = "/app/public/uploads"
+
+[checks]
+  [checks.health]
+    port = 3000
+    type = "http"
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/login"
