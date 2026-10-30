@@ -1,0 +1,122 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  // Ishlab chiqarishda PostgreSQL tavsiya etiladi: provider = "postgresql"
+  // va DATABASE_URL ni Postgres ulanish satriga almashtiring (schema o'zgarmaydi).
+  // Bu konteynerda Postgres server mavjud emasligi sababli SQLite ishlatildi.
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// SQLite ushbu loyihada native enumlarni qo'llamaydi, shu sababli String
+// ustunlar + lib/constants.ts dagi TypeScript union turlari orqali cheklanadi.
+// GlobalRole: "ADMIN" | "MANAGER" | "EMPLOYEE"
+// AuditStatus: "DRAFT" | "COMPLETED"
+// IssuePriority: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW"
+// IssueStatus: "NEW" | "PLANNED" | "IN_PROGRESS" | "REVIEW" | "DONE"
+
+model User {
+  id           String         @id @default(cuid())
+  name         String
+  email        String         @unique
+  passwordHash String
+  role         String          @default("EMPLOYEE")
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  memberships  CompanyMember[]
+  createdAudits Audit[]       @relation("AuditCreatedBy")
+  createdIssues Issue[]       @relation("IssueCreatedBy")
+}
+
+model Company {
+  id            String   @id @default(cuid())
+  name          String
+  logoUrl       String?
+  industry      String?
+  employeeCount Int?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  members  CompanyMember[]
+  audits   Audit[]
+  issues   Issue[]
+}
+
+model CompanyMember {
+  id        String   @id @default(cuid())
+  userId    String
+  companyId String
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, companyId])
+}
+
+model Audit {
+  id          String      @id @default(cuid())
+  companyId   String
+  title       String
+  status      String      @default("DRAFT")
+  startedAt   DateTime    @default(now())
+  completedAt DateTime?
+  createdById String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  company    Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdBy  User?         @relation("AuditCreatedBy", fields: [createdById], references: [id])
+  answers    AuditAnswer[]
+  issues     Issue[]
+
+  @@index([companyId])
+}
+
+model AuditAnswer {
+  id          String   @id @default(cuid())
+  auditId     String
+  questionId  Int
+  score       Int?
+  comment     String?
+  evidenceUrl String?
+  evidenceName String?
+  updatedAt   DateTime @updatedAt
+
+  audit Audit @relation(fields: [auditId], references: [id], onDelete: Cascade)
+
+  @@unique([auditId, questionId])
+  @@index([auditId])
+}
+
+model Issue {
+  id            String        @id @default(cuid())
+  companyId     String
+  auditId       String?
+  questionId    Int?
+  blockId       Int?
+  title         String
+  cause         String?
+  solutionPlan  String?
+  ownerName     String?
+  startDate     DateTime?
+  dueDate       DateTime?
+  priority      String        @default("MEDIUM")
+  status        String        @default("NEW")
+  notes         String?
+  evidenceUrl   String?
+  evidenceName  String?
+  createdById   String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  company   Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  audit     Audit?  @relation(fields: [auditId], references: [id], onDelete: SetNull)
+  createdBy User?   @relation("IssueCreatedBy", fields: [createdById], references: [id])
+
+  @@index([companyId])
+  @@index([auditId])
+}
