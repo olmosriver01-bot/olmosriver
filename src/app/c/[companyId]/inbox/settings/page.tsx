@@ -6,6 +6,7 @@ import { isManager, listStaff } from "@/lib/inbox/members";
 import { formatHHMM, formatLocal } from "@/lib/inbox/time";
 import { AI_MODELS, isAiConfigured } from "@/lib/inbox/ai";
 import { appBaseUrl } from "@/lib/inbox/http";
+import { coverageByChannel, coverageIncomplete } from "@/lib/inbox/coverage";
 import { instagramRedirectUri, instagramWebhookUrl } from "@/lib/inbox/instagram";
 import { inboxPageCtx } from "../_components/ctx";
 import { InboxNav } from "../_components/inbox-nav";
@@ -40,6 +41,7 @@ export default async function InboxSettingsPage({ params, searchParams }: { para
     prisma.inboxAlert.findMany({ where: { companyId, ok: false }, orderBy: { createdAt: "desc" }, take: 8 }),
     prisma.inboxOutage.findMany({ where: { companyId }, orderBy: { startedAt: "desc" }, take: 8, include: { channel: { select: { name: true } } } }),
   ]);
+  const coverage = await coverageByChannel(companyId);
   const staffName = new Map(staff.map((s) => [s.id, s.name]));
   const base = appBaseUrl();
   const https = base.startsWith("https://");
@@ -71,9 +73,17 @@ export default async function InboxSettingsPage({ params, searchParams }: { para
                   <Badge variant={c.status === "CONNECTED" ? "success" : c.status === "PENDING" ? "warning" : "danger"}>{STATUS_TEXT[c.status] ?? c.status}</Badge>
                 </p>
                 {c.statusDetail && <p className="text-xs text-danger">{c.statusDetail}</p>}
+                <p className="text-xs text-muted-foreground">Охирги муваффақиятли текширув: {formatLocal(c.lastSyncOkAt, tz)}</p>
                 <p className="text-xs text-muted-foreground">
-                  Охирги муваффақиятли текширув: {formatLocal(c.lastSyncOkAt, tz)} · Охирги келган хабар: {formatLocal(c.lastEventAt, tz)}
+                  Кирувчи хабарлар: {coverage.get(c.id)?.lastInboundAt ? `келмоқда (охиргиси ${formatLocal(coverage.get(c.id)!.lastInboundAt, tz)})` : "ҳали келмаган"} · Чиқувчи
+                  хабарлар: {coverage.get(c.id)?.lastOutboundAt ? `келмоқда (охиргиси ${formatLocal(coverage.get(c.id)!.lastOutboundAt, tz)})` : "ҳали келмаган"}
                 </p>
+                {(coverageIncomplete(coverage.get(c.id)) || coverage.get(c.id)?.state === "NO_DATA") && (
+                  <p className="text-xs text-warning">
+                    Иккала йўналиш ҳали тасдиқланмаган. Синов: бошқа аккаунтдан шу профилга ёзинг, сўнг профилдан иловада жавоб беринг — иккала хабар ҳам CRMда кўриниши керак.
+                    Чиқувчи хабар тасдиқланмагунча бу профилдаги мижозлар «жавобсиз» деб эълон қилинмайди.
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground">
                   Кузатув бошланган: {formatLocal(c.trackingStartedAt, tz)}. Ундан олдинги ёзишмалар юкланмаган.
                   {c.platform === "INSTAGRAM" && c.tokenExpiresAt ? ` Токен муддати: ${formatLocal(c.tokenExpiresAt, tz)} гача (автоматик узайтирилади).` : ""}

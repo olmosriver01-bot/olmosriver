@@ -32,7 +32,7 @@ function fmt(ms: number): string {
   return `${Math.floor(h / 24)} кун ${h % 24} с`;
 }
 
-export function WaitingTimer({ since, warnMin, dangerMin }: { since: string; warnMin: number; dangerMin: number }) {
+export function WaitingTimer({ since, warnMin, dangerMin, unverified }: { since: string; warnMin: number; dangerMin: number; unverified?: boolean }) {
   const [now, setNow] = useState<number | null>(null);
   useEffect(() => {
     const first = setTimeout(() => setNow(Date.now()), 0);
@@ -45,6 +45,13 @@ export function WaitingTimer({ since, warnMin, dangerMin }: { since: string; war
   if (now === null) return <span className="rounded-full bg-surface-muted px-2.5 py-0.5 text-xs font-semibold">кутмоқда</span>;
   const ms = now - new Date(since).getTime();
   const min = ms / 60_000;
+  if (unverified) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-surface-muted px-2.5 py-0.5 text-xs font-semibold tabular-nums text-muted-foreground" title="Бу профилда чиқувчи хабарлар келмаяпти — жавоб берилгани номаълум">
+        ? {fmt(ms)} · жавоб номаълум
+      </span>
+    );
+  }
   return (
     <span
       className={cn(
@@ -73,8 +80,8 @@ export function MonitoringNotice({ companyId, acked }: { companyId: string; acke
       <p className="mt-1 text-foreground/80">
         Дўконнинг Telegram ва Instagram профилларидаги мижозлар билан хизмат ёзишмалари шу тизимда сақланади, жавоб тезлиги
         ўлчанади ва сифати (жумладан AI ёрдамида) таҳлил қилинади. Натижаларни раҳбар ва менежерлар кўради. Панелдан
-        юборган ҳар бир хабарингиз сизнинг логинингиз билан сақланади. AI хулосаси автоматик жазо ёки жаримага сабаб
-        бўлмайди — ҳар бир топилмани раҳбар текширади.
+        юборган хабарингиз логинингиз билан сақланади; иловадан ёзилган жавоблар эса профил номидан кўринади. Таҳлил профил ва
+        суҳбат кесимида юритилади — мақсад мижозлар эътиборсиз қолмаслиги ва хизмат сифатини яхшилаш.
       </p>
       <Button size="sm" className="mt-3" disabled={pending} onClick={() => start(async () => void (await ackMonitoring(companyId)))}>
         Танишдим

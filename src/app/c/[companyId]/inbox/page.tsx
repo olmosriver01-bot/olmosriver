@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { PLATFORM_LABELS, STATUS_LABELS, type ConversationStatus, type Platform } from "@/lib/inbox/core";
 import { conversationScope, listStaff } from "@/lib/inbox/members";
 import { formatLocal } from "@/lib/inbox/time";
+import { coverageByChannel, coverageIncomplete } from "@/lib/inbox/coverage";
 import { inboxPageCtx } from "./_components/ctx";
 import { InboxNav } from "./_components/inbox-nav";
 import { AutoRefresh, MonitoringNotice, TelegramLinkCard, WaitingTimer } from "./_components/client";
@@ -62,6 +63,8 @@ export default async function InboxPage({ params, searchParams }: { params: Prom
   });
 
   const down = channels.filter((c) => c.status !== "CONNECTED");
+  const coverage = await coverageByChannel(companyId);
+  const blind = channels.filter((c) => c.status === "CONNECTED" && coverageIncomplete(coverage.get(c.id)));
   const base = `/c/${companyId}/inbox`;
   const qs = (patch: Partial<Search>) => {
     const next = { ...sp, ...patch } as Record<string, string | undefined>;
@@ -103,12 +106,29 @@ export default async function InboxPage({ params, searchParams }: { params: Prom
         </div>
       ) : null}
 
+      {blind.length > 0 && (
+        <div className="rounded-xl border border-warning/40 bg-warning/10 p-4 text-sm">
+          <p className="font-semibold">Кузатув тўлиқ эмас — чиқувчи жавоблар келмаяпти</p>
+          <ul className="mt-1 space-y-0.5">
+            {blind.map((c) => (
+              <li key={c.id}>
+                {c.name} ({PLATFORM_LABELS[c.platform as Platform]}): {coverage.get(c.id)?.detail}.
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1 text-xs">
+            Бу профиллардаги мижозлар «жавобсиз» деб ҳисобланмайди ва улар бўйича огоҳлантириш юборилмайди. Текшириш учун шу профилдан иловада бирор мижозга жавоб ёзинг — у
+            суҳбатда кўринса, кузатув тикланади.
+          </p>
+        </div>
+      )}
+
       <TelegramLinkCard companyId={companyId} linked={!!member.telegramChatId} botConnected={!!settings.tgBotTokenEnc} />
 
       <div className="-mx-4 flex gap-2 overflow-x-auto px-4 lg:mx-0 lg:flex-wrap lg:px-0">
         <Link className={chip(!sp.queue && !sp.assignee && !sp.status)} href={qs({ queue: undefined, assignee: undefined, status: undefined })}>Очиқ суҳбатлар</Link>
         <Link className={chip(sp.queue === "waiting")} href={qs({ queue: "waiting", status: undefined })}>Жавоб кутмоқда · {waitingCount}</Link>
-        <Link className={chip(sp.queue === "unassigned")} href={qs({ queue: "unassigned", assignee: undefined, status: undefined })}>Масъулсиз навбат · {unassignedCount}</Link>
+        <Link className={chip(sp.queue === "unassigned")} href={qs({ queue: "unassigned", assignee: undefined, status: undefined })}>Бириктирилмаган · {unassignedCount}</Link>
         <Link className={chip(sp.assignee === "me")} href={qs({ assignee: sp.assignee === "me" ? undefined : "me", queue: sp.queue === "unassigned" ? undefined : sp.queue })}>Менинг суҳбатларим</Link>
       </div>
 
@@ -163,7 +183,7 @@ export default async function InboxPage({ params, searchParams }: { params: Prom
                     </p>
                   </div>
                   {c.waitingSince && c.status !== "CLOSED" ? (
-                    <WaitingTimer since={c.waitingSince.toISOString()} warnMin={settings.reminderMinutes} dangerMin={settings.managerMinutes} />
+                    <WaitingTimer since={c.waitingSince.toISOString()} warnMin={settings.managerMinutes} dangerMin={settings.adminMinutes} unverified={coverageIncomplete(coverage.get(c.channelId))} />
                   ) : (
                     <span className="shrink-0 text-xs text-muted-foreground">{formatLocal(c.lastMessageAt, settings.timezone)}</span>
                   )}
@@ -174,7 +194,7 @@ export default async function InboxPage({ params, searchParams }: { params: Prom
                 </p>
                 <div className="mt-2 flex flex-wrap items-center gap-1.5">
                   <Badge variant={STATUS_VARIANT[c.status as ConversationStatus]}>{c.isSpam ? "Спам" : STATUS_LABELS[c.status as ConversationStatus]}</Badge>
-                  <Badge variant={c.assignee ? "default" : "danger"}>{c.assignee?.name ?? "Масъулсиз"}</Badge>
+                  {c.assignee && <Badge variant="default">{c.assignee.name}</Badge>}
                   {c.orderRef && <Badge variant="success">Буюртма {c.orderRef}</Badge>}
                 </div>
               </Link>

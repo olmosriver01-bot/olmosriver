@@ -6,17 +6,11 @@ import { conversationUrl, notifyOnce } from "./notify";
 import { formatDuration, formatLocal, lastScheduledMoment } from "./time";
 import { appBaseUrl } from "./http";
 import type { TgButton } from "./telegram";
+import { FINDING_TYPE_LABELS, SEVERITY_LABELS } from "./labels";
+import { coverageByChannel, coverageIncomplete } from "./coverage";
+import { customerLabel } from "./labels";
 
-export const FINDING_TYPE_LABELS: Record<string, string> = {
-  UNANSWERED_PART: "Саволнинг бир қисми жавобсиз қолган",
-  RUDE_REPLY: "Қўпол ёки менсимай ёзилган жавоб",
-  MISSING_ORDER_DETAILS: "Буюртмада келишилмаган муҳим маълумот",
-  IGNORED_COMPLAINT: "Мижоз норозилиги эътиборсиз қолган",
-  BROKEN_CALLBACK_PROMISE: "Ваъда қилинган қайта алоқа бажарилмаган",
-  PRICE_MISMATCH: "Нарх/шарт CRMдаги маълумотга мос эмас",
-  OTHER: "Бошқа камчилик",
-};
-export const SEVERITY_LABELS: Record<string, string> = { HIGH: "юқори", MEDIUM: "ўртача", LOW: "паст" };
+export { FINDING_TYPE_LABELS, SEVERITY_LABELS } from "./labels";
 const SEVERITY_RANK: Record<string, number> = { HIGH: 3, MEDIUM: 2, LOW: 1 };
 
 export type ReportData = {
@@ -28,12 +22,17 @@ export type ReportData = {
   channels: {
     id: string; name: string; platform: string; status: string; statusDetail: string | null;
     trackingStartedAt: Date | null; lastEventAt: Date | null; lastSyncOkAt: Date | null;
+    lastInboundAt: Date | null; lastOutboundAt: Date | null; outboundVerified: boolean; coverageDetail: string | null;
+    newConversations: number; replies: number; avgMs: number | null; medianMs: number | null; late: number; waiting: number;
   }[];
   dataIssues: string[];
   complete: boolean;
   newConversations: number;
   unassignedOpen: number;
-  waiting: { conversationId: string; channelName: string; assigneeName: string | null; waitedMs: number }[];
+  /** Chiquvchi oqimi tasdiqlangan profillardagi javob kutayotgan mijozlar. */
+  waiting: { conversationId: string; channelName: string; customer: string; assigneeName: string | null; waitedMs: number }[];
+  /** Chiquvchi xabarlar kelmayotgan profillarda: javob berilgan-berilmagani noma'lum. */
+  waitingUnverified: { conversationId: string; channelName: string; customer: string; waitedMs: number }[];
   late: { conversationId: string; channelName: string; responderName: string | null; latencyMs: number }[];
   repliedEpisodes: number;
   closedWithoutReply: number;
@@ -82,8 +81,18 @@ export async function computeReport(companyId: string, from: Date, to: Date, now
       `${channelName.get(o.channelId) ?? "Профил"}: узилиш ${formatLocal(o.startedAt, settings.timezone)} — ${o.endedAt ? formatLocal(o.endedAt, settings.timezone) : "ҳали давом этмоқда"} (${o.reason}).`
     );
   }
+  const coverage = await coverageByChannel(companyId, now);
+  for (const c of channels) {
+    const cov = coverage.get(c.id);
+    if (coverageIncomplete(cov)) dataIssues.push(`${channelName.get(c.id)}: ${cov!.detail}. Бу профилдаги мижозлар «жавобсиз» деб ҳисобланмади.`);
+  }
   if (!settings.tgBotTokenEnc) dataIssues.push("Telegram бот уланмаган — огоҳлантириш ва ҳисоботлар Telegram'га юборилмайди.");
 
+  const newByChannel = new Map(
+    (await prisma.inboxConversation.groupBy({ by: ["channelId"], where: { companyId, firstMessageAt: { gte: from, lt: to } }, _count: { _all: true } })).map(
+      (r) => [r.channelId, r._count._all]
+    )
+  );
   const [newConversations, unassignedOpen] = await Promise.all([
     prisma.inboxConversation.count({ where: { companyId, firstMessageAt: { gte: from, lt: to } } }),
     prisma.inboxConversation.count({ where: { companyId, assigneeId: null, isSpam: false, status: { not: "CLOSED" } } }),
@@ -94,12 +103,16 @@ export async function computeReport(companyId: string, from: Date, to: Date, now
     include: { assignee: { select: { name: true } } },
     orderBy: { waitingSince: "asc" },
   });
-  const waiting = waitingRows.map((c) => ({
+  const toWaiting = (c: (typeof waitingRows)[number]) => ({
     conversationId: c.id,
     channelName: channelName.get(c.channelId) ?? "",
+    customer: customerLabel(c),
     assigneeName: c.assignee?.name ?? null,
     waitedMs: now.getTime() - c.waitingSince!.getTime(),
-  }));
+  });
+  const waiting = waitingRows.filter((c) => !coverageIncomplete(coverage.get(c.channelId))).map(toWaiting);
+  const waitingUnverified = waitingRows.filter((c) => coverageIncomplete(coverage.get(c.channelId))).map(toWaiting);
+  const perChannel = new Map<string, number[]>();
 
   // Davr ichida faol bo'lgan suhbatlar bo'yicha javob epizodlari
   const active = await prisma.inboxConversation.findMany({
@@ -134,6 +147,8 @@ export async function computeReport(companyId: string, from: Date, to: Date, now
       }
       repliedEpisodes++;
       const latency = ep.endAt.getTime() - ep.startAt.getTime();
+      if (!perChannel.has(conv.channelId)) perChannel.set(conv.channelId, []);
+      perChannel.get(conv.channelId)!.push(latency);
       if (ep.responderKnown && ep.responderUserId) {
         if (!perSeller.has(ep.responderUserId)) perSeller.set(ep.responderUserId, []);
         perSeller.get(ep.responderUserId)!.push(latency);
@@ -194,15 +209,25 @@ export async function computeReport(companyId: string, from: Date, to: Date, now
     from,
     to,
     slaMinutes: settings.reminderMinutes,
-    channels: channels.map((c) => ({
-      id: c.id, name: c.name, platform: c.platform, status: c.status, statusDetail: c.statusDetail,
-      trackingStartedAt: c.trackingStartedAt, lastEventAt: c.lastEventAt, lastSyncOkAt: c.lastSyncOkAt,
-    })),
+    channels: channels.map((c) => {
+      const cov = coverage.get(c.id);
+      const lat = perChannel.get(c.id) ?? [];
+      return {
+        id: c.id, name: c.name, platform: c.platform, status: c.status, statusDetail: c.statusDetail,
+        trackingStartedAt: c.trackingStartedAt, lastEventAt: c.lastEventAt, lastSyncOkAt: c.lastSyncOkAt,
+        lastInboundAt: cov?.lastInboundAt ?? null, lastOutboundAt: cov?.lastOutboundAt ?? null,
+        outboundVerified: !coverageIncomplete(cov), coverageDetail: coverageIncomplete(cov) ? cov!.detail : null,
+        newConversations: newByChannel.get(c.id) ?? 0, replies: lat.length, avgMs: avg(lat), medianMs: median(lat),
+        late: lat.filter((l) => l > slaMs).length,
+        waiting: waitingRows.filter((w) => w.channelId === c.id).length,
+      };
+    }),
     dataIssues,
     complete: dataIssues.length === 0,
     newConversations,
     unassignedOpen,
     waiting,
+    waitingUnverified,
     late,
     repliedEpisodes,
     closedWithoutReply,
@@ -246,6 +271,7 @@ export function formatReport(companyId: string, r: ReportData): { text: string; 
   for (const c of r.channels) {
     const mark = c.status === "CONNECTED" ? "🟢" : "🔴";
     L.push(`${mark} ${c.name} (${PLATFORM_LABELS[c.platform as Platform]}) — охирги текширув: ${formatLocal(c.lastSyncOkAt, tz)}`);
+    L.push(`   кирувчи: ${formatLocal(c.lastInboundAt, tz)} · чиқувчи: ${c.lastOutboundAt ? formatLocal(c.lastOutboundAt, tz) : "ҳали келмаган"}${c.outboundVerified ? "" : " ⚠️"}`);
   }
   L.push("");
   if (!r.complete) {
@@ -263,29 +289,33 @@ export function formatReport(companyId: string, r: ReportData): { text: string; 
 
   L.push(`Ҳали жавоб кутаётган мижозлар: ${r.waiting.length}`);
   for (const w of r.waiting.slice(0, 5)) {
-    L.push(`• ${w.channelName} — ${formatDuration(w.waitedMs)}, масъул: ${w.assigneeName ?? "йўқ"}${ref(w.conversationId, "Жавоб кутмоқда")}`);
+    L.push(`• ${w.channelName} · ${w.customer} — ${formatDuration(w.waitedMs)}${ref(w.conversationId, "Жавоб кутмоқда")}`);
   }
   if (r.waiting.length > 5) L.push(`• …яна ${r.waiting.length - 5} та`);
+  if (r.waitingUnverified.length) {
+    L.push(`Жавоб берилгани номаълум (чиқувчи хабарлар келмаётган профилларда): ${r.waitingUnverified.length} — бу «жавобсиз» дегани эмас, кузатув тўлиқ эмас.`);
+  }
   L.push("");
 
   L.push(`${r.slaMinutes} дақиқадан кеч жавоб берилган: ${r.late.length}`);
   for (const l of r.late.slice(0, 4)) {
-    L.push(`• ${l.channelName} — ${formatDuration(l.latencyMs)}, жавоб берган: ${l.responderName ?? "аниқланмаган"}${ref(l.conversationId, "Кеч жавоб")}`);
+    L.push(`• ${l.channelName} — ${formatDuration(l.latencyMs)}${ref(l.conversationId, "Кеч жавоб")}`);
   }
   if (r.late.length > 4) L.push(`• …яна ${r.late.length - 4} та`);
   L.push("");
 
-  L.push("Сотувчилар:");
-  if (r.sellers.length === 0) L.push("— панел орқали жавоб берилмаган");
-  for (const s of r.sellers) {
-    const speed = s.medianMs === null ? "жавоб йўқ" : `ўртача ${formatDuration(s.avgMs!)}, медиана ${formatDuration(s.medianMs)}`;
-    L.push(`• ${s.name}: ${s.replies} жавоб, ${speed}, кеч: ${s.late}, очиқ суҳбат: ${s.openConversations}`);
+  L.push("Профиллар бўйича жавоб тезлиги:");
+  for (const c of r.channels) {
+    const speed = c.medianMs === null ? "жавоб қайд этилмаган" : `ўртача ${formatDuration(c.avgMs!)}, медиана ${formatDuration(c.medianMs)}`;
+    L.push(`• ${c.name}: янги ${c.newConversations}, жавоб ${c.replies}, ${speed}, кеч ${c.late}, кутмоқда ${c.waiting}`);
   }
-  L.push("");
-
-  L.push(`Муаллифи аниқланмаган хабарлар: ${r.unknownAuthor.messages}`);
-  if (r.unknownAuthor.replies) {
-    L.push(`  (иловадан тўғридан-тўғри ёзилган ${r.unknownAuthor.replies} жавоб, ўртача ${formatDuration(r.unknownAuthor.avgMs!)}, кеч: ${r.unknownAuthor.late} — ҳеч бир ходимга ёзилмаган)`);
+  const panelSellers = r.sellers.filter((s) => s.replies > 0);
+  if (panelSellers.length) {
+    L.push("", "CRM панелидан жавоб берганлар:");
+    for (const s of panelSellers) L.push(`• ${s.name}: ${s.replies} жавоб, медиана ${formatDuration(s.medianMs!)}, кеч: ${s.late}`);
+  }
+  if (r.unknownAuthor.messages) {
+    L.push("", `Иловадан ёзилган жавоблар: ${r.unknownAuthor.messages} та хабар. API ходимни билдирмайди — улар ҳеч кимга бириктирилмаган, фақат профил кесимида ҳисобланади.`);
   }
   L.push("");
 

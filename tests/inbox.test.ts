@@ -10,7 +10,8 @@ import { sendStaffMessage } from "@/lib/inbox/send";
 import { runEscalations } from "@/lib/inbox/escalation";
 import { runHealthChecks } from "@/lib/inbox/health";
 import { computeReport, formatReport, sendScheduledReport } from "@/lib/inbox/report";
-import { analyzeConversation, setAnalyzerForTests, checkCallbackPromises } from "@/lib/inbox/ai";
+import { analyzeConversation, setAnalyzerForTests, setDrafterForTests, checkCallbackPromises } from "@/lib/inbox/ai";
+import { outboundCoverage } from "@/lib/inbox/coverage";
 import { conversationScope, getConversationForUser } from "@/lib/inbox/members";
 import { messageNeedsReply } from "@/lib/inbox/classify";
 import { isOnShift, lastScheduledMoment } from "@/lib/inbox/time";
@@ -85,6 +86,15 @@ async function reset() {
   const ig = await prisma.inboxChannel.create({
     data: { companyId: company.id, platform: "INSTAGRAM", name: "inna.flowers", externalId: "999", tokenEnc: encryptSecret("IGTOKEN"), tokenExpiresAt: new Date("2027-01-10T00:00:00Z"), tokenRefreshedAt: T0, status: "CONNECTED", canReply: true, trackingStartedAt: new Date("2026-11-01T00:00:00Z"), lastSyncOkAt: T0 },
   });
+  // Har ikki profilda chiquvchi oqim avval tasdiqlangan (bir kun oldingi yopilgan suhbat)
+  for (const ch of [tg, ig]) {
+    const dayBefore = new Date(T0.getTime() - 86400_000);
+    const seed = await prisma.inboxConversation.create({
+      data: { companyId: company.id, channelId: ch.id, externalChatId: "seed", status: "CLOSED", closedAt: dayBefore, firstMessageAt: dayBefore, lastMessageAt: dayBefore },
+    });
+    await prisma.inboxMessage.create({ data: { companyId: company.id, conversationId: seed.id, externalId: "seed-in", direction: "IN", authorType: "CUSTOMER", text: "seed", sentAt: dayBefore } });
+    await prisma.inboxMessage.create({ data: { companyId: company.id, conversationId: seed.id, externalId: "seed-out", direction: "OUT", authorType: "EXTERNAL_UNKNOWN", text: "seed", sentAt: dayBefore } });
+  }
   Object.assign(S, { companyId: company.id, otherCompanyId: other.id, admin: admin.id, manager: manager.id, sellerA: a.id, sellerB: b.id, tg: tg.id, ig: ig.id });
   calls = [];
   tgBehaviour = () => undefined;
@@ -107,6 +117,7 @@ function tgOut(messageId: number, text: string, at: Date, extra: Record<string, 
   return { update_id: updateId++, business_message: { message_id: messageId, date: at.getTime() / 1000, business_connection_id: "bc1", chat: { id: chat, type: "private", first_name: "Mijoz" }, from: { id: 777, first_name: "Inna Flowers" }, text, ...extra } };
 }
 const conv = (chat = "4242") => prisma.inboxConversation.findUniqueOrThrow({ where: { channelId_externalChatId: { channelId: S.tg, externalChatId: chat } } });
+const msgCount = () => prisma.inboxMessage.count({ where: { NOT: { externalId: { startsWith: "seed" } } } });
 const botSends = (chatId?: string) => calls.filter((c) => c.method === "sendMessage" && !c.body.business_connection_id && (!chatId || c.body.chat_id === chatId));
 
 test("жавобсиз мижоз: таймер биринчи саволдан бошланади ва кетма-кет хабарда нолга тушмайди", async () => {
@@ -182,17 +193,17 @@ test("такрорий webhook қайта ҳисобланмайди", async () 
     telegramWebhook(new Request("https://crm.example.test/api/webhooks/telegram/x", { method: "POST", headers: { "x-telegram-bot-api-secret-token": secret }, body: JSON.stringify(update) }), { params: Promise.resolve({ companyId: S.companyId }) });
   const update = tgIn(1, "Нарх қанча?", new Date());
   assert.equal((await req(update, "wrong")).status, 401, "нотўғри махфий калит рад этилади");
-  assert.equal(await prisma.inboxMessage.count(), 0);
+  assert.equal(await msgCount(), 0);
   assert.equal((await req(update)).status, 200);
   const second = await req(update);
   assert.equal(second.status, 200);
   assert.equal((await second.json()).duplicate, true);
-  assert.equal(await prisma.inboxMessage.count(), 1);
+  assert.equal(await msgCount(), 1);
 
   // Xuddi shu xabar boshqa update_id bilan kelsa ham ikkinchi marta yozilmaydi
   const r = await handleTelegramUpdate(S.companyId, { ...update, update_id: 999999 });
   assert.equal(r, "duplicate");
-  assert.equal(await prisma.inboxMessage.count(), 1);
+  assert.equal(await msgCount(), 1);
   assert.equal(await alreadyProcessed("nope"), false);
   await markProcessed(S.companyId, "k1");
   await markProcessed(S.companyId, "k1");
@@ -432,7 +443,10 @@ test("ҳисобот ҳисоб-китоби ва 23:00 жадвали", async (
   assert.equal(r.unassignedOpen, 2);
 
   const { text, buttons } = formatReport(S.companyId, r)[0];
-  assert.ok(!text.includes("Mijoz") && !text.includes("Савол"), "ҳисоботга мижоз исми ва хабар матни кўчирилмайди");
+  assert.ok(!text.includes("Савол"), "умумий ҳисоботга хабар матни кўчирилмайди");
+  assert.match(text, /Inna TG \(Telegram\) · Mijoz — 40 дақиқа/, "жавоб кутаётган суҳбат профил ва мижоз кесимида");
+  assert.match(text, /Профиллар бўйича жавоб тезлиги:\n• Inna TG: янги 4, жавоб 3/);
+  assert.ok(!text.includes("жавоб берган:"), "кеч жавоб ҳеч бир ходимга бириктирилмайди");
   const waitingId = (await conv("1004")).id;
   assert.ok(buttons.some((x) => x.url.endsWith(`/inbox/${waitingId}`)), "муаммо ёнида суҳбатни очадиган тугма");
   assert.ok(text.length < 4000);
@@ -467,11 +481,11 @@ test("Instagram webhook: имзо текшируви, echo ва такрорий
   const now = Date.now();
   const incoming = { object: "instagram", entry: [{ id: "999", time: now, messaging: [{ sender: { id: "cust1" }, recipient: { id: "999" }, timestamp: now - 60_000, message: { mid: "mid.1", text: "Сколько стоит букет из 51 розы?" } }] }] };
   assert.equal((await post(incoming, "wrong-secret")).status, 401, "сохта имзо рад этилади");
-  assert.equal(await prisma.inboxMessage.count(), 0);
+  assert.equal(await msgCount(), 0);
   assert.equal((await post(incoming)).status, 200);
   assert.equal((await post(incoming)).status, 200);
-  assert.equal(await prisma.inboxMessage.count(), 1);
-  const c = await prisma.inboxConversation.findFirstOrThrow({ where: { channelId: S.ig } });
+  assert.equal(await msgCount(), 1);
+  const c = await prisma.inboxConversation.findFirstOrThrow({ where: { channelId: S.ig, externalChatId: "cust1" } });
   assert.ok(c.waitingSince);
 
   // Instagram ilovasidan yozilgan javob (echo) — muallif aniqlanmagan
@@ -526,7 +540,19 @@ test("AI: фақат таҳлил, далилсиз топилма сақлан�
   const sendsBefore = calls.length;
   const r = await analyzeConversation(S.companyId, id, min(20));
   assert.equal(r.status, "ok");
-  assert.equal(calls.length, sendsBefore, "AI таҳлили мижозга ёки бошқа жойга ҳеч нарса юбормайди");
+  const toCustomers = calls.slice(sendsBefore).filter((c) => c.body.business_connection_id || c.url.includes("/me/messages"));
+  assert.equal(toCustomers.length, 0, "AI таҳлили мижозга ҳеч нарса юбормайди");
+  // Rahbarga topilma haqida xabar: profil, suhbat, dalil (vaqt bilan), tavsiya va suhbatni ochish tugmasi
+  const note = botSends("chat-admin").find((c) => String(c.body.text).includes("Эҳтимолий камчилик"))!;
+  const noteText = String(note.body.text);
+  assert.match(noteText, /Профил: Inna TG \(Telegram\)/);
+  assert.match(noteText, /Суҳбат: Mijoz/);
+  assert.match(noteText, /Далил:\n• 20\.11\.2026 15:00 · Мижоз: «25 та атиргул/);
+  assert.match(noteText, /Тавсия этилган жавоб: «Бугун соат 18:00 гача/);
+  assert.ok(!noteText.includes("123 45 67") && !/Sotuvchi|Ходим Каримова/.test(noteText), "телефон рақами ва ходим исми йўқ");
+  assert.ok(JSON.stringify(note.body.reply_markup).includes(`/inbox/${id}`));
+  assert.equal(botSends("chat-manager").filter((c) => String(c.body.text).includes("Эҳтимолий камчилик")).length, 1);
+  assert.equal(botSends("chat-a").length, 0, "топилма сотувчиларга юборилмайди");
   const findings = await prisma.inboxFinding.findMany({ where: { conversationId: id } });
   assert.equal(findings.length, 1, "мавжуд бўлмаган хабарга таянган ва манбасиз нарх топилмаси ташланади");
   assert.equal(findings[0].status, "PENDING");
@@ -578,9 +604,9 @@ test("ҳуқуқлар: дўконлар ажратилган, сотувчи ф
 
   const seller = { id: S.sellerA, role: "EMPLOYEE" as const };
   const visible = await prisma.inboxConversation.findMany({ where: await conversationScope(S.companyId, seller) });
-  assert.deepEqual(visible.map((v) => v.id).sort(), [ca.id, cq.id].sort());
+  assert.deepEqual(visible.filter((v) => v.externalChatId !== "seed").map((v) => v.id).sort(), [ca.id, cq.id].sort());
   assert.equal(await getConversationForUser(S.companyId, cb.id, seller), null);
-  assert.equal((await prisma.inboxConversation.findMany({ where: await conversationScope(S.companyId, { id: S.manager, role: "MANAGER" }) })).length, 3);
+  assert.equal((await prisma.inboxConversation.findMany({ where: await conversationScope(S.companyId, { id: S.manager, role: "MANAGER" }) })).filter((v) => v.externalChatId !== "seed").length, 3);
 
   // Profil bo'yicha cheklov: ruxsat berilmagan profildagi mas'ulsiz suhbat ko'rinmaydi
   await prisma.inboxMember.update({ where: { companyId_userId: { companyId: S.companyId, userId: S.sellerA } }, data: { allChannels: false } });
@@ -602,7 +628,7 @@ test("сақлаш муддати: эски ёзишмалар ўчирилад�
   await handleTelegramUpdate(S.companyId, tgIn(1, "Янги савол?", min(0), 3002), min(0));
   const r = await runRetention(S.companyId, min(1));
   assert.equal(r.deletedMessages, 1);
-  assert.equal(await prisma.inboxConversation.count({ where: { companyId: S.companyId } }), 1);
+  assert.equal(await prisma.inboxConversation.count({ where: { companyId: S.companyId, externalChatId: { not: "seed" } } }), 1);
 });
 
 test("махфий маълумот базада очиқ сақланмайди", async () => {
@@ -610,4 +636,88 @@ test("махфий маълумот базада очиқ сақланмайди
   const ch = await prisma.inboxChannel.findUniqueOrThrow({ where: { id: S.ig } });
   const dump = JSON.stringify([s, ch]);
   assert.ok(!dump.includes(BOT_TOKEN) && !dump.includes("IGTOKEN") && !dump.includes("ig-app-secret") && !dump.includes("hook-secret"));
+});
+
+test("хабарнома таркиби: профил, суҳбат, жавобсиз савол далили ва вақти, тавсия, суҳбатни очиш", async () => {
+  // Sotuvchilar CRMdan foydalanmaydi: Telegram bog'lanmagan → sotuvchi bosqichi jim o'tadi, rahbarga boradi
+  await prisma.inboxMember.updateMany({ where: { companyId: S.companyId, userId: { in: [S.sellerA, S.sellerB] } }, data: { telegramChatId: null } });
+  await handleTelegramUpdate(S.companyId, tgIn(1, "51 та атиргул неча пул? Карта: 8600 1234 5678 9012", min(0)), min(0));
+  await handleTelegramUpdate(S.companyId, tgIn(2, "Бугун етказасизми?", min(2)), min(2));
+  const id = (await conv()).id;
+
+  await runEscalations(S.companyId, min(6));
+  assert.equal(botSends().length, 0);
+  assert.equal(await prisma.inboxAlert.count({ where: { ok: false } }), 0, "уланмаган сотувчилар «етказилмади» деб ёзилмайди");
+
+  await runEscalations(S.companyId, min(15));
+  const sent = botSends("chat-manager");
+  assert.equal(sent.length, 1);
+  const text = String(sent[0].body.text);
+  assert.match(text, /Мижозга жавоб берилмаяпти: 15 дақиқа/);
+  assert.match(text, /Профил: Inna TG \(Telegram\)/);
+  assert.match(text, /Суҳбат: Mijoz/);
+  assert.match(text, /Жавобсиз савол \(20\.11\.2026 15:00\): «51 та атиргул неча пул\? Карта: \[рақам\]» ва яна 1 та хабар/);
+  assert.match(text, /Тавсия: мижозга ҳозироқ жавоб беринг/);
+  assert.ok(!text.includes("Масъул"), "ҳеч бир ходимга бириктирилмайди");
+  assert.equal((sent[0].body.reply_markup as { inline_keyboard: { text: string; url: string }[][] }).inline_keyboard[0][0].url, `https://crm.example.test/c/${S.companyId}/inbox/${id}`);
+
+  // AI yoqilgan bo'lsa — javob loyihasi qo'shiladi, bir holat uchun bir marta so'raladi
+  process.env.ANTHROPIC_API_KEY = "test-key";
+  await prisma.inboxSettings.update({ where: { companyId: S.companyId }, data: { aiEnabled: true } });
+  let drafts = 0;
+  setDrafterForTests(async (req) => {
+    drafts++;
+    assert.ok(!req.payload.includes("8600"), "карта рақами AIга юборилмайди");
+    return { reply: "Ассалому алайкум! Нархни ҳозир аниқлаб, тасдиқлаб юборамиз.", usage: { inputTokens: 300, outputTokens: 40, cacheReadTokens: 0, cacheWriteTokens: 0 } };
+  });
+  await runEscalations(S.companyId, min(30));
+  await runEscalations(S.companyId, min(31));
+  const adminText = String(botSends("chat-admin")[0].body.text);
+  assert.match(adminText, /Мижоз узоқ вақт жавобсиз қолди: 30 дақиқа/);
+  assert.match(adminText, /Тавсия этилган жавоб: «Ассалому алайкум! Нархни ҳозир аниқлаб/);
+  assert.equal(drafts, 1);
+  assert.equal(botSends("chat-admin").length, 1);
+  assert.equal(calls.filter((c) => c.body.business_connection_id).length, 0, "тавсия мижозга юборилмайди");
+  setDrafterForTests(null);
+  delete process.env.ANTHROPIC_API_KEY;
+});
+
+test("чиқувчи хабарлар келмаса: мижоз «жавобсиз» деб белгиланмайди, кузатув тўлиқ эмас деб кўрсатилади", async () => {
+  // Yangi ulangan profil: faqat kiruvchi xabarlar kelgan, chiquvchi hali bir marta ham kelmagan
+  await prisma.inboxMessage.deleteMany({ where: { externalId: "seed-out", conversation: { channelId: S.tg } } });
+  await handleTelegramUpdate(S.companyId, tgIn(1, "Нарх қанча?", min(0)), min(0));
+  assert.equal((await outboundCoverage(S.tg, min(1))).state, "NEVER");
+
+  const r1 = await runEscalations(S.companyId, min(31));
+  await runEscalations(S.companyId, min(40));
+  assert.equal(r1.suppressed, 1);
+  const texts = botSends().map((c) => String(c.body.text));
+  assert.equal(texts.filter((t) => /жавобсиз қолди|жавоб берилмаяпти|жавоб кутмоқда/.test(t)).length, 0, "тасдиқланмаган профилда мижоз жавобсиз деб эълон қилинмайди");
+  assert.equal(botSends("chat-admin").filter((c) => String(c.body.text).includes("Кузатув тўлиқ эмас: Inna TG")).length, 1, "раҳбарга битта огоҳлантириш");
+  assert.equal(botSends("chat-manager").length, 1);
+
+  const rep = await computeReport(S.companyId, min(-60), min(41), min(41));
+  assert.equal(rep.waiting.length, 0);
+  assert.equal(rep.waitingUnverified.length, 1);
+  assert.equal(rep.complete, false);
+  assert.equal(rep.channels.find((c) => c.id === S.tg)!.outboundVerified, false);
+  assert.match(formatReport(S.companyId, rep)[0].text, /Жавоб берилгани номаълум/);
+
+  // Xodim ilovadan javob berdi va u integratsiyaga keldi → kuzatuv tiklanadi, eski holat yopiladi
+  await handleTelegramUpdate(S.companyId, tgOut(2, "450 000 сўм", min(42)), min(42));
+  assert.equal((await outboundCoverage(S.tg, min(43))).state, "OK");
+  assert.equal((await conv()).waitingSince, null);
+  // Endi haqiqiy javobsiz mijoz odatdagidek e'lon qilinadi
+  await handleTelegramUpdate(S.companyId, tgIn(3, "Етказиш қанча туради?", min(50)), min(50));
+  await runEscalations(S.companyId, min(66));
+  assert.equal(botSends("chat-manager").filter((c) => String(c.body.text).includes("жавоб берилмаяпти")).length, 1);
+
+  // Chiquvchi oqim to'xtab qolgan: 5 mijoz yozdi, shu vaqt ichida birorta chiquvchi xabar kelmadi
+  for (let i = 0; i < 5; i++) await handleTelegramUpdate(S.companyId, tgIn(1, "Савол бор эди?", min(100 + i), 7000 + i), min(100 + i));
+  assert.equal((await outboundCoverage(S.tg, min(140))).state, "STALE");
+  const before = botSends().length;
+  await runEscalations(S.companyId, min(140));
+  const added = botSends().slice(before).map((c) => String(c.body.text));
+  assert.ok(added.every((t) => t.includes("Кузатув тўлиқ эмас")), "якка тартибдаги «жавобсиз» хабарлари ўрнига битта умумий огоҳлантириш");
+  assert.equal(added.length, 2);
 });

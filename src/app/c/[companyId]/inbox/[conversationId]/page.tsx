@@ -7,6 +7,7 @@ import { PLATFORM_LABELS, STATUS_LABELS, type ConversationStatus, type Platform 
 import { getConversationForUser, listStaff } from "@/lib/inbox/members";
 import { formatLocal, msSince } from "@/lib/inbox/time";
 import { isAiConfigured } from "@/lib/inbox/ai";
+import { coverageIncomplete, outboundCoverage } from "@/lib/inbox/coverage";
 import { FINDING_TYPE_LABELS, SEVERITY_LABELS } from "@/lib/inbox/report";
 import { cn } from "@/lib/utils";
 import { inboxPageCtx } from "../_components/ctx";
@@ -36,6 +37,8 @@ export default async function ConversationPage({ params }: { params: Promise<{ c
   const name = new Map(staff.map((s) => [s.id, s.name]));
   const flagged = new Set(findings.filter((f) => f.status !== "REJECTED").flatMap((f) => JSON.parse(f.messageIds) as string[]));
   const channel = conv.channel;
+  const cov = await outboundCoverage(channel.id);
+  const unverified = coverageIncomplete(cov);
 
   const windowClosed = !conv.lastCustomerAt || msSince(conv.lastCustomerAt) > 24 * 3600_000;
   const lockedByOther = !manager && conv.assigneeId !== null && conv.assigneeId !== user.id;
@@ -63,7 +66,7 @@ export default async function ConversationPage({ params }: { params: Promise<{ c
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
               <Badge variant="info">{conv.isSpam ? "Спам" : STATUS_LABELS[conv.status as ConversationStatus]}</Badge>
               {conv.waitingSince && conv.status !== "CLOSED" && (
-                <WaitingTimer since={conv.waitingSince.toISOString()} warnMin={settings.reminderMinutes} dangerMin={settings.managerMinutes} />
+                <WaitingTimer since={conv.waitingSince.toISOString()} warnMin={settings.managerMinutes} dangerMin={settings.adminMinutes} unverified={unverified} />
               )}
             </div>
           </div>
@@ -73,13 +76,18 @@ export default async function ConversationPage({ params }: { params: Promise<{ c
           <p className="mx-auto max-w-md rounded-lg bg-surface-muted px-3 py-1.5 text-center text-[11px] text-muted-foreground">
             Бу профилда кузатув {formatLocal(channel.trackingStartedAt, tz)} да бошланган. Ундан олдинги ёзишмалар CRMда йўқ.
           </p>
+          {unverified && (
+            <p className="mx-auto max-w-md rounded-lg border border-warning/40 bg-warning/10 px-3 py-1.5 text-center text-[11px]">
+              Бу профилда чиқувчи хабарлар CRMга келмаяпти: {cov.detail}. Мижозга иловадан жавоб берилган бўлиши мумкин.
+            </p>
+          )}
           {conv.messages.map((m) => {
             const out = m.direction === "OUT";
             const who =
               m.authorType === "CUSTOMER" ? null
               : m.authorType === "STAFF_PANEL" ? (m.author?.name ?? "Ходим (ўчирилган ҳисоб)")
               : m.authorType === "AUTO" ? "Автоматик жавоб"
-              : "Муаллиф аниқланмаган · иловадан ёзилган";
+              : `${channel.name} профилидан · иловадан ёзилган, ходим аниқланмаган`;
             return (
               <div key={m.id} id={`m-${m.id}`} className={cn("flex", out ? "justify-end" : "justify-start")}>
                 <div
@@ -91,7 +99,7 @@ export default async function ConversationPage({ params }: { params: Promise<{ c
                     m.deletedAt && "opacity-60"
                   )}
                 >
-                  {who && <p className={cn("mb-0.5 text-[11px] font-semibold", m.authorType === "EXTERNAL_UNKNOWN" ? "text-warning" : "text-muted-foreground")}>{who}</p>}
+                  {who && <p className={cn("mb-0.5 text-[11px] font-semibold", "text-muted-foreground")}>{who}</p>}
                   <p className={cn("whitespace-pre-wrap break-words", m.deletedAt && "line-through")}>
                     {m.kind === "REACTION" ? `Реакция: ${m.text}` : m.text || `[${m.kind.toLowerCase()}]`}
                   </p>
@@ -114,7 +122,7 @@ export default async function ConversationPage({ params }: { params: Promise<{ c
 
         <footer className="sticky bottom-0 border-t border-border bg-surface p-3">
           <Composer companyId={companyId} conversationId={conv.id} disabledReason={disabledReason} />
-          <p className="mt-1.5 text-[11px] text-muted-foreground">Хабар сизнинг логинингиз билан сақланади. AI мижозга ҳеч нарса юбормайди.</p>
+          <p className="mt-1.5 text-[11px] text-muted-foreground">CRMдан жавоб бериш ихтиёрий — иловадан ёзилган жавоблар ҳам шу ерда кўринади. Бу ердан юборилган хабар логинингиз билан сақланади; AI мижозга ҳеч нарса юбормайди.</p>
         </footer>
       </section>
 

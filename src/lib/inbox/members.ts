@@ -96,3 +96,9 @@ export async function recipientsFor(
   }
   return out;
 }
+
+/** Rahbarlar: menejer va admin ogohlantirishlarini oluvchilar (takrorsiz). */
+export async function leadershipRecipients(companyId: string): Promise<Recipient[]> {
+  const all = [...(await recipientsFor(companyId, "admin")), ...(await recipientsFor(companyId, "manager"))];
+  return all.filter((r, i) => all.findIndex((x) => x.userId === r.userId) === i);
+}

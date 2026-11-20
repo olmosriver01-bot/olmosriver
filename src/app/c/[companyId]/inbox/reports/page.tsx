@@ -87,7 +87,8 @@ export default async function ReportsPage({ params, searchParams }: { params: Pr
               <span className="font-medium">{c.name}</span>
               <span className="text-muted-foreground">{PLATFORM_LABELS[c.platform as Platform]}</span>
               <span className="text-xs text-muted-foreground">
-                кузатув: {formatLocal(c.trackingStartedAt, tz)} дан · охирги хабар: {formatLocal(c.lastEventAt, tz)} · охирги текширув: {formatLocal(c.lastSyncOkAt, tz)}
+                кузатув: {formatLocal(c.trackingStartedAt, tz)} дан · охирги кирувчи: {formatLocal(c.lastInboundAt, tz)} · охирги чиқувчи:{" "}
+                {c.lastOutboundAt ? formatLocal(c.lastOutboundAt, tz) : "ҳали келмаган"} · охирги текширув: {formatLocal(c.lastSyncOkAt, tz)}
               </span>
             </li>
           ))}
@@ -101,7 +102,7 @@ export default async function ReportsPage({ params, searchParams }: { params: Pr
         <Stat label="Муаллифи аниқланмаган хабар" value={r.unknownAuthor.messages} />
         <Stat label="Жавоб берилган мурожаат" value={r.repliedEpisodes} />
         <Stat label="Жавобсиз якунланган" value={r.closedWithoutReply} />
-        <Stat label="Масъулсиз очиқ суҳбат" value={r.unassignedOpen} />
+        <Stat label="Жавоби номаълум (кузатув тўлиқ эмас)" value={r.waitingUnverified.length} tone={r.waitingUnverified.length ? "warning" : undefined} />
         <Stat label="Текширилмаган топилма" value={r.pendingFindingsTotal} />
       </div>
 
@@ -111,11 +112,50 @@ export default async function ReportsPage({ params, searchParams }: { params: Pr
         <ul className="divide-y divide-border text-sm">
           {r.waiting.map((w) => (
             <li key={w.conversationId} className="flex items-center justify-between gap-3 py-2">
-              <span>{w.channelName} · <span className="font-semibold text-danger">{formatDuration(w.waitedMs)}</span> · масъул: {w.assigneeName ?? "йўқ"}</span>
+              <span>{w.channelName} · {w.customer} · <span className="font-semibold text-danger">{formatDuration(w.waitedMs)}</span></span>
               {link(w.conversationId)}
             </li>
           ))}
         </ul>
+      </section>
+
+      {r.waitingUnverified.length > 0 && (
+        <section className="rounded-xl border border-warning/40 bg-warning/10 p-4">
+          <h2 className="mb-1 text-sm font-semibold">Жавоб берилгани номаълум: {r.waitingUnverified.length}</h2>
+          <p className="mb-2 text-xs">Бу профилларда чиқувчи хабарлар CRMга келмаяпти, шунинг учун бу мижозлар «жавобсиз» деб ҳисобланмади. Суҳбатни иловада текширинг.</p>
+          <ul className="divide-y divide-border text-sm">
+            {r.waitingUnverified.map((w) => (
+              <li key={w.conversationId} className="flex items-center justify-between gap-3 py-2">
+                <span>{w.channelName} · {w.customer} · {formatDuration(w.waitedMs)}</span>
+                {link(w.conversationId)}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      <section className="rounded-xl border border-border bg-surface p-4">
+        <h2 className="mb-2 text-sm font-semibold">Профиллар бўйича</h2>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[34rem] text-sm">
+            <thead className="text-left text-xs text-muted-foreground">
+              <tr><th className="py-1.5">Профил</th><th>Янги</th><th>Жавоб</th><th>Ўртача</th><th>Медиана</th><th>Кеч</th><th>Кутмоқда</th></tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {r.channels.map((c) => (
+                <tr key={c.id}>
+                  <td className="py-2 font-medium">{c.name}{c.outboundVerified ? "" : " ⚠️"}</td>
+                  <td>{c.newConversations}</td>
+                  <td>{c.replies}</td>
+                  <td>{c.avgMs === null ? "—" : formatDuration(c.avgMs)}</td>
+                  <td>{c.medianMs === null ? "—" : formatDuration(c.medianMs)}</td>
+                  <td>{c.late}</td>
+                  <td>{c.waiting}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="rounded-xl border border-border bg-surface p-4">
@@ -124,7 +164,7 @@ export default async function ReportsPage({ params, searchParams }: { params: Pr
         <ul className="divide-y divide-border text-sm">
           {r.late.map((l, i) => (
             <li key={i} className="flex items-center justify-between gap-3 py-2">
-              <span>{l.channelName} · {formatDuration(l.latencyMs)} · жавоб берган: {l.responderName ?? "аниқланмаган"}</span>
+              <span>{l.channelName} · {formatDuration(l.latencyMs)}</span>
               {link(l.conversationId)}
             </li>
           ))}
@@ -132,7 +172,7 @@ export default async function ReportsPage({ params, searchParams }: { params: Pr
       </section>
 
       <section className="rounded-xl border border-border bg-surface p-4">
-        <h2 className="mb-2 text-sm font-semibold">Сотувчилар</h2>
+        <h2 className="mb-2 text-sm font-semibold">CRM панелидан жавоб берганлар</h2>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[32rem] text-sm">
             <thead className="text-left text-xs text-muted-foreground">

@@ -24,7 +24,7 @@ export default async function FindingsPage({ params, searchParams }: { params: P
 
   const findings = await prisma.inboxFinding.findMany({
     where: { companyId, status },
-    include: { conversation: { include: { channel: { select: { name: true, platform: true } }, assignee: { select: { name: true } } } } },
+    include: { conversation: { include: { channel: { select: { name: true, platform: true } } } } },
     orderBy: { createdAt: "desc" },
     take: 100,
   });
@@ -42,8 +42,8 @@ export default async function FindingsPage({ params, searchParams }: { params: P
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Сифат топилмалари</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          AI ёзишмаларни таҳлил қилиб, эҳтимолий камчиликларни далил билан кўрсатади. Ҳар бир топилмани раҳбар текширади: AI хулосаси ўзи ҳеч
-          қандай жазо ёки жаримага сабаб бўлмайди ва мижозга ҳеч нарса юбормайди.
+          AI ёзишмаларни таҳлил қилиб, эҳтимолий камчиликларни далил билан кўрсатади. Ҳар бир топилмани раҳбар текширади: топилмалар профил
+          ва суҳбат кесимида кўрсатилади, ҳеч бир ходимга бириктирилмайди. Мақсад — хизматни яхшилаш; AI мижозга ҳеч нарса юбормайди.
         </p>
       </div>
       <InboxNav companyId={companyId} manager={manager} admin={admin} pendingFindings={count("PENDING")} />
@@ -82,7 +82,7 @@ export default async function FindingsPage({ params, searchParams }: { params: P
               <p className="mt-2 text-base font-semibold">{FINDING_TYPE_LABELS[f.type] ?? f.type}</p>
               <p className="text-xs text-muted-foreground">
                 Профил: {f.conversation.channel.name} ({PLATFORM_LABELS[f.conversation.channel.platform as Platform]}) · Суҳбат:{" "}
-                {f.conversation.customerName ?? "Мижоз"} · Масъул: {f.conversation.assignee?.name ?? "бириктирилмаган"}
+                {f.conversation.customerName ?? (f.conversation.customerUsername ? `@${f.conversation.customerUsername}` : "Мижоз")}
               </p>
               <p className="mt-2"><span className="font-medium">Сабаб: </span>{f.reason}</p>
               {f.verification === "INSUFFICIENT_DATA" && <p className="mt-1 text-xs text-warning">Текшириш учун маълумот етарли эмас — CRMда тасдиқланган нарх/шарт манбаси йўқ.</p>}
@@ -95,7 +95,7 @@ export default async function FindingsPage({ params, searchParams }: { params: P
                   <p key={m.id} className="text-sm">
                     <span className="text-xs text-muted-foreground">
                       {formatLocal(m.sentAt, settings.timezone)} ·{" "}
-                      {m.direction === "IN" ? "Мижоз" : m.authorType === "STAFF_PANEL" ? (m.author?.name ?? "Ходим") : m.authorType === "AUTO" ? "Автоматик жавоб" : "Муаллиф аниқланмаган"}:
+                      {m.direction === "IN" ? "Мижоз" : m.authorType === "STAFF_PANEL" ? (m.author?.name ?? "Ходим") : m.authorType === "AUTO" ? "Автоматик жавоб" : "Профил жавоби (ходим аниқланмаган)"}:
                     </span>{" "}
                     {m.text || `[${m.kind.toLowerCase()}]`}
                   </p>
