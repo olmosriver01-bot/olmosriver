@@ -29,6 +29,11 @@ model User {
   memberships  CompanyMember[]
   createdAudits Audit[]       @relation("AuditCreatedBy")
   createdIssues Issue[]       @relation("IssueCreatedBy")
+  inboxMemberships   InboxMember[]
+  inboxChannelAccess InboxChannelAccess[]
+  inboxShifts        InboxShift[]
+  inboxAssigned      InboxConversation[] @relation("InboxAssignee")
+  inboxMessages      InboxMessage[]      @relation("InboxMessageAuthor")
 }
 
 model Company {
@@ -43,6 +48,12 @@ model Company {
   members  CompanyMember[]
   audits   Audit[]
   issues   Issue[]
+  inboxSettings      InboxSettings?
+  inboxChannels      InboxChannel[]
+  inboxMembers       InboxMember[]
+  inboxShifts        InboxShift[]
+  inboxConversations InboxConversation[]
+  inboxCatalog       InboxCatalogItem[]
 }
 
 model CompanyMember {
@@ -119,4 +130,301 @@ model Issue {
 
   @@index([companyId])
   @@index([auditId])
+}
+
+// ───────────────────────── Ёзишмалар назорати (Inbox) ─────────────────────────
+// Platform: "TELEGRAM" | "INSTAGRAM"
+// ChannelStatus: "PENDING" | "CONNECTED" | "DISCONNECTED" | "ERROR"
+// ConversationStatus: "NEW" | "IN_PROGRESS" | "WAITING_CUSTOMER" | "CLOSED"
+// Direction: "IN" | "OUT"
+// AuthorType: "CUSTOMER" | "STAFF_PANEL" | "EXTERNAL_UNKNOWN" | "AUTO"
+// DeliveryStatus: "PENDING" | "SENT" | "FAILED" | "UNKNOWN"
+// FindingStatus: "PENDING" | "CONFIRMED" | "REJECTED"
+
+model InboxSettings {
+  companyId          String    @id
+  reminderMinutes    Int       @default(5)
+  managerMinutes     Int       @default(15)
+  adminMinutes       Int       @default(30)
+  reportTime         String    @default("23:00")
+  timezone           String    @default("Asia/Tashkent")
+  retentionDays      Int       @default(180)
+  autoReplyPatterns  String    @default("")
+  deliveryTerms      String    @default("")
+  aiEnabled          Boolean   @default(false)
+  aiModel            String    @default("claude-opus-5-5")
+  tgBotTokenEnc      String?
+  tgBotUsername      String?
+  tgBotId            String?
+  tgWebhookSecretEnc String?
+  tgLastCheckAt      DateTime?
+  tgLastOkAt         DateTime?
+  tgLastError        String?
+  igAppId            String?
+  igAppSecretEnc     String?
+  igVerifyToken      String?
+  lastReportKey      String?
+  lastRetentionAt    DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+}
+
+model InboxChannel {
+  id                   String    @id @default(cuid())
+  companyId            String
+  platform             String
+  name                 String
+  username             String?
+  externalId           String
+  altExternalId        String?
+  businessConnectionId String?
+  tokenEnc             String?
+  tokenExpiresAt       DateTime?
+  tokenRefreshedAt     DateTime?
+  status               String    @default("PENDING")
+  statusDetail         String?
+  canReply             Boolean   @default(false)
+  trackingStartedAt    DateTime?
+  lastEventAt          DateTime?
+  lastSyncOkAt         DateTime?
+  lastCheckAt          DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  company       Company              @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  conversations InboxConversation[]
+  outages       InboxOutage[]
+  access        InboxChannelAccess[]
+
+  @@unique([companyId, platform, externalId])
+  @@index([companyId])
+  @@index([businessConnectionId])
+}
+
+model InboxOutage {
+  id        String    @id @default(cuid())
+  companyId String
+  channelId String
+  startedAt DateTime
+  endedAt   DateTime?
+  reason    String
+
+  channel InboxChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, startedAt])
+  @@index([channelId])
+}
+
+model InboxMember {
+  id                String    @id @default(cuid())
+  companyId         String
+  userId            String
+  telegramChatId    String?
+  linkCodeHash      String?
+  linkCodeExpiresAt DateTime?
+  notifyReminder    Boolean   @default(true)
+  notifyManager     Boolean   @default(false)
+  notifyAdmin       Boolean   @default(false)
+  receiveReport     Boolean   @default(false)
+  allChannels       Boolean   @default(true)
+  monitoringAckAt   DateTime?
+  createdAt         DateTime  @default(now())
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, userId])
+  @@index([linkCodeHash])
+}
+
+model InboxChannelAccess {
+  id        String @id @default(cuid())
+  channelId String
+  userId    String
+
+  channel InboxChannel @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  user    User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([channelId, userId])
+}
+
+model InboxShift {
+  id          String @id @default(cuid())
+  companyId   String
+  userId      String
+  days        String @default("1,2,3,4,5,6,7")
+  startMinute Int
+  endMinute   Int
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+}
+
+model InboxConversation {
+  id                String    @id @default(cuid())
+  companyId         String
+  channelId         String
+  externalChatId    String
+  customerName      String?
+  customerUsername  String?
+  status            String    @default("NEW")
+  assigneeId        String?
+  orderRef          String?
+  isSpam            Boolean   @default(false)
+  waitingSince      DateTime?
+  waitingMessageId  String?
+  resolvedThroughAt DateTime?
+  closedAt          DateTime?
+  reopenCount       Int       @default(0)
+  firstMessageAt    DateTime?
+  lastMessageAt     DateTime?
+  lastCustomerAt    DateTime?
+  lastStaffAt       DateTime?
+  aiAnalyzedAt      DateTime?
+  aiSummary         String?
+  promiseDueAt      DateTime?
+  promiseMessageId  String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  company  Company        @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  channel  InboxChannel   @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  assignee User?          @relation("InboxAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  messages InboxMessage[]
+  events   InboxEvent[]
+  findings InboxFinding[]
+
+  @@unique([channelId, externalChatId])
+  @@index([companyId, status])
+  @@index([companyId, waitingSince])
+  @@index([companyId, lastMessageAt])
+  @@index([assigneeId])
+}
+
+model InboxMessage {
+  id             String    @id @default(cuid())
+  companyId      String
+  conversationId String
+  externalId     String?
+  direction      String
+  authorType     String
+  authorUserId   String?
+  kind           String    @default("TEXT")
+  text           String    @default("")
+  originalText   String?
+  needsReply     Boolean   @default(false)
+  sentAt         DateTime
+  receivedAt     DateTime  @default(now())
+  editedAt       DateTime?
+  deletedAt      DateTime?
+  deliveryStatus String?
+  deliveryError  String?
+  clientToken    String?   @unique
+
+  conversation InboxConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  author       User?             @relation("InboxMessageAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+
+  @@unique([conversationId, externalId])
+  @@index([conversationId, sentAt])
+  @@index([companyId, sentAt])
+}
+
+// type: "ASSIGN" | "CLOSE" | "REOPEN" | "SPAM" | "UNSPAM" | "ORDER_LINK"
+model InboxEvent {
+  id             String   @id @default(cuid())
+  companyId      String
+  conversationId String
+  type           String
+  fromUserId     String?
+  toUserId       String?
+  byUserId       String?
+  note           String?
+  createdAt      DateTime @default(now())
+
+  conversation InboxConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, createdAt])
+}
+
+model InboxWebhookEvent {
+  id         String   @id @default(cuid())
+  companyId  String
+  dedupeKey  String   @unique
+  receivedAt DateTime @default(now())
+
+  @@index([receivedAt])
+}
+
+model InboxAlert {
+  id              String   @id @default(cuid())
+  companyId       String
+  kind            String
+  dedupeKey       String   @unique
+  conversationId  String?
+  channelId       String?
+  recipientUserId String?
+  ok              Boolean  @default(false)
+  error           String?
+  createdAt       DateTime @default(now())
+
+  @@index([companyId, createdAt])
+}
+
+model InboxFinding {
+  id             String    @id @default(cuid())
+  companyId      String
+  conversationId String
+  type           String
+  severity       String
+  confidence     Float
+  reason         String
+  messageIds     String
+  suggestedReply String?
+  verification   String    @default("NOT_APPLICABLE")
+  source         String    @default("AI")
+  status         String    @default("PENDING")
+  reviewedById   String?
+  reviewedAt     DateTime?
+  dedupeKey      String    @unique
+  createdAt      DateTime  @default(now())
+
+  conversation InboxConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([companyId, status])
+  @@index([conversationId])
+}
+
+model InboxAiRun {
+  id              String   @id @default(cuid())
+  companyId       String
+  conversationId  String?
+  model           String
+  inputTokens     Int      @default(0)
+  outputTokens    Int      @default(0)
+  cacheReadTokens Int      @default(0)
+  cacheWriteTokens Int     @default(0)
+  costUsd         Float    @default(0)
+  ok              Boolean  @default(true)
+  error           String?
+  createdAt       DateTime @default(now())
+
+  @@index([companyId, createdAt])
+}
+
+model InboxCatalogItem {
+  id        String   @id @default(cuid())
+  companyId String
+  name      String
+  price     Int?
+  available Boolean  @default(true)
+  note      String?
+  updatedAt DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
 }

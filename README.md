@@ -54,3 +54,8 @@ npm run dev
 тавсия матни: **«Лавозим бошига 3–7 та KPI дан ошманг»** дейди. Асл матнлар ўзгартирилмасдан, худди
 шу тафовут билан дастурга кўчирилди (`src/lib/kpi-data.ts` — `BLOCKS[1].questions[2].text` ва
 `BLOCKS[1].weakRecommendation`).
+
+## Ёзишмалар назорати (Telegram / Instagram)
+
+Мижоз ёзишмаларини назорат қилиш модули — созлаш, уланиш қадамлари ва чекловлар: [`docs/INBOX.md`](docs/INBOX.md).
+Код: `src/lib/inbox/`, саҳифалар: `src/app/c/[companyId]/inbox/`, тестлар: `npm test`.

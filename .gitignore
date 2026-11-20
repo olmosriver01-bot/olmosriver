@@ -44,3 +44,6 @@ dev.db
 dev.db-journal
 /public/uploads
 
+
+# test database
+prisma/test.db*

@@ -14,6 +14,7 @@ import {
   Menu,
   X,
   Gauge,
+  MessagesSquare,
 } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
@@ -53,6 +54,7 @@ export function AppShell({
         { href: `/c/${currentCompanyId}/dashboard`, label: "Бошқарув панели", icon: LayoutDashboard },
         { href: `/c/${currentCompanyId}/audits`, label: "KPI аудити", icon: ClipboardList },
         { href: `/c/${currentCompanyId}/issues`, label: "Вазифалар", icon: ListChecks },
+        { href: `/c/${currentCompanyId}/inbox`, label: "Ёзишмалар назорати", icon: MessagesSquare },
       ]
     : [];
 
@@ -192,7 +194,7 @@ export function AppShell({
         </div>
       )}
 
-      <div className="flex min-h-screen flex-1 flex-col">
+      <div className="flex min-h-screen min-w-0 flex-1 flex-col">
         <header className="flex items-center justify-between border-b border-border bg-surface px-4 py-3 lg:px-6">
           <button className="rounded-md p-2 hover:bg-surface-muted lg:hidden" onClick={() => setMobileOpen((v) => !v)}>
             {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
@@ -200,7 +202,7 @@ export function AppShell({
           <div className="hidden lg:block" />
           <ThemeToggle />
         </header>
-        <main className="flex-1 p-4 lg:p-8">{children}</main>
+        <main className="min-w-0 flex-1 p-4 lg:p-8">{children}</main>
       </div>
     </div>
   );
