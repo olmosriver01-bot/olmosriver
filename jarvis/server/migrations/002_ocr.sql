@@ -1,0 +1,2 @@
+ALTER TABLE documents ADD COLUMN ocr_pages INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN warning TEXT;

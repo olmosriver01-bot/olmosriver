@@ -4,6 +4,7 @@ import dns from 'node:dns/promises';
 import net from 'node:net';
 import { getDb, now, UPLOADS_DIR, HttpError, log } from './db.ts';
 import { normalize, tokens } from '../shared/translit.ts';
+import { ocrAvailable, ocrPdf } from './ocr.ts';
 
 export type Page = { page: number | null; text: string };
 
@@ -48,11 +49,12 @@ function saveChunks(documentId: number, pages: Page[]) {
   }
 }
 
-function insertDoc(d: { projectId: number | null; name: string; type: string; file?: string; url?: string; pages: Page[]; error?: string }) {
+function insertDoc(d: { projectId: number | null; name: string; type: string; file?: string; url?: string; pages: Page[]; error?: string; processing?: boolean; totalPages?: number }) {
   const db = getDb();
   const chars = d.pages.reduce((n, p) => n + p.text.length, 0);
   let status = 'ready', error = d.error ?? null;
   if (d.error) status = 'error';
+  else if (d.processing) { status = 'processing'; error = null; }
   else if (chars < Math.max(20, d.pages.length * 15)) {
     status = 'unreadable';
     error = d.type === 'pdf'
@@ -61,9 +63,9 @@ function insertDoc(d: { projectId: number | null; name: string; type: string; fi
   }
   return db.transaction(() => {
     const r = db.prepare('INSERT INTO documents(project_id, name, type, file, url, status, pages, chars, error, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)')
-      .run(d.projectId, d.name, d.type, d.file ?? null, d.url ?? null, status, d.pages.length, chars, error, now());
+      .run(d.projectId, d.name, d.type, d.file ?? null, d.url ?? null, status, d.totalPages ?? d.pages.length, chars, error, now());
     const id = Number(r.lastInsertRowid);
-    if (status === 'ready') saveChunks(id, d.pages);
+    if (status === 'ready' || status === 'processing') saveChunks(id, d.pages);
     log('document_added', 'document', id, `${d.name} (${status})`);
     return getDoc(id);
   })();
@@ -86,7 +88,56 @@ export async function addFile(projectId: number | null, originalName: string, bu
       pages = [{ page: null, text }];
     }
   } catch (e: any) { error = 'Файлни ўқиб бўлмади: ' + (e?.message || e); }
+  const empty = type === 'pdf' && !error ? pages.filter((p) => p.text.replace(/\s/g, '').length < 15).map((p) => p.page!) : [];
+  if (empty.length && ocrAvailable() && !process.env.JARVIS_DISABLE_OCR) {
+    const doc = insertDoc({ projectId, name: originalName, type, file, pages: pages.filter((p) => !empty.includes(p.page!)), processing: true, totalPages: pages.length });
+    runOcr(doc.id, buf, empty);
+    return doc;
+  }
   return insertDoc({ projectId, name: originalName, type, file, pages, error });
+}
+
+export const OCR_MAX_PAGES = 60;
+const ocrJobs = new Map<number, Promise<void>>();
+export const waitOcr = (id: number) => ocrJobs.get(id) ?? Promise.resolve();
+/** Матн қатлами йўқ бетларни фонда OCR қилиш. Натижа «OCR» деб белгиланади. */
+function runOcr(documentId: number, buf: Buffer, emptyPages: number[]) {
+  const job = (async () => {
+    const db = getDb();
+    try {
+      const res = (await ocrPdf(buf, emptyPages, OCR_MAX_PAGES)).filter((p) => p.text.replace(/\s/g, '').length >= 10);
+      const d = getDoc(documentId);
+      if (!d) return;
+      db.transaction(() => {
+        if (res.length) saveChunks(documentId, res);
+        const chars = (db.prepare('SELECT COALESCE(SUM(LENGTH(text)),0) n FROM chunks WHERE document_id = ?').get(documentId) as any).n;
+        const skipped = emptyPages.length - Math.min(emptyPages.length, OCR_MAX_PAGES);
+        const warn = res.length ? `${res.length} та бет OCR (расмдан таниб олиш) орқали ўқилди — айрим сўз ва рақамларда хато бўлиши мумкин. Муҳим фактларни асл файлдан текширинг.${skipped ? ` ${skipped} та бет OCR лимитидан (${OCR_MAX_PAGES}) ошгани учун ўқилмади.` : ''}` : null;
+        if (chars >= 20) db.prepare("UPDATE documents SET status='ready', chars=?, ocr_pages=?, warning=?, error=NULL WHERE id=?").run(chars, res.length, warn, documentId);
+        else db.prepare("UPDATE documents SET status='unreadable', chars=?, error=? WHERE id=?").run(chars, 'Скан PDF: OCR ҳам матн топа олмади (сифати паст ёки бўш бетлар). Ҳужжат ўқилмади.', documentId);
+      })();
+      log('document_ocr', 'document', documentId, `${res.length}/${emptyPages.length} бет`);
+    } catch (e: any) {
+      db.prepare("UPDATE documents SET status = CASE WHEN chars >= 20 THEN 'ready' ELSE 'error' END, error=? WHERE id=?").run('OCR хатоси: ' + (e?.message || e), documentId);
+      log('document_ocr_error', 'document', documentId, String(e?.message || e));
+    } finally { ocrJobs.delete(documentId); }
+  })();
+  ocrJobs.set(documentId, job);
+}
+
+/** Сервер қайта ёқилганда чала қолган OCR ишларини давом эттириш. */
+export async function resumeOcr() {
+  const rows = getDb().prepare("SELECT id, file FROM documents WHERE status='processing' AND file IS NOT NULL AND deleted_at IS NULL").all() as any[];
+  for (const r of rows) {
+    try {
+      const buf = fs.readFileSync(path.join(UPLOADS_DIR, path.basename(r.file)));
+      removeDocChunks(r.id);
+      const pages = await extractPdf(buf);
+      const empty = pages.filter((p) => p.text.replace(/\s/g, '').length < 15).map((p) => p.page!);
+      saveChunks(r.id, pages.filter((p) => !empty.includes(p.page!)));
+      runOcr(r.id, buf, empty);
+    } catch (e: any) { getDb().prepare("UPDATE documents SET status='error', error=? WHERE id=?").run('OCR қайта бошланмади: ' + e.message, r.id); }
+  }
 }
 
 function isPrivate(ip: string) {
@@ -123,7 +174,7 @@ export async function addUrl(projectId: number | null, rawUrl: string) {
   return insertDoc({ projectId, name: title, type: 'url', url: u.toString(), pages, error });
 }
 
-export type Hit = { chunkId: number; documentId: number; docName: string; docType: string; url: string | null; page: number | null; text: string; score: number };
+export type Hit = { chunkId: number; documentId: number; docName: string; docType: string; url: string | null; page: number | null; text: string; score: number; ocr?: number };
 
 /** Манбалардан қидириш. projectId: number — фақат шу лойиҳа; null — фақат умумий манбалар. Лойиҳалар аралашмайди. */
 export function search(q: string, projectId: number | null, documentIds?: number[], limit = 8): Hit[] {
@@ -131,9 +182,9 @@ export function search(q: string, projectId: number | null, documentIds?: number
   if (!toks.length) return [];
   const match = toks.map((t) => `"${t.length > 5 ? t.slice(0, t.length - 2) : t}"*`).join(' OR ');
   const ids = (documentIds ?? []).filter(Number.isInteger);
-  const sql = `SELECT c.id chunkId, c.document_id documentId, d.name docName, d.type docType, d.url url, c.page page, c.text text, bm25(chunks_fts) score
+  const sql = `SELECT c.id chunkId, c.document_id documentId, d.name docName, d.type docType, d.url url, c.page page, c.text text, bm25(chunks_fts) score, d.ocr_pages ocr
     FROM chunks_fts JOIN chunks c ON c.id = chunks_fts.rowid JOIN documents d ON d.id = c.document_id
-    WHERE chunks_fts MATCH ? AND d.deleted_at IS NULL AND d.status = 'ready'
+    WHERE chunks_fts MATCH ? AND d.deleted_at IS NULL AND d.status IN ('ready','processing')
       AND ${projectId == null ? 'd.project_id IS NULL' : 'd.project_id = ?'}
       ${ids.length ? `AND d.id IN (${ids.join(',')})` : ''}
     ORDER BY score LIMIT ?`;
@@ -143,9 +194,9 @@ export function search(q: string, projectId: number | null, documentIds?: number
 
 /** Жараёнлар учун: ҳар бир ҳужжатнинг бошидан парчалар. */
 export function leadChunks(projectId: number, perDoc = 6, maxChars = 24000): Hit[] {
-  const rows = getDb().prepare(`SELECT c.id chunkId, c.document_id documentId, d.name docName, d.type docType, d.url url, c.page page, c.text text, 0 score, c.idx idx
+  const rows = getDb().prepare(`SELECT c.id chunkId, c.document_id documentId, d.name docName, d.type docType, d.url url, c.page page, c.text text, 0 score, c.idx idx, d.ocr_pages ocr
     FROM chunks c JOIN documents d ON d.id = c.document_id
-    WHERE d.project_id = ? AND d.deleted_at IS NULL AND d.status = 'ready' AND c.idx < ? ORDER BY d.id, c.idx`).all(projectId, perDoc) as any[];
+    WHERE d.project_id = ? AND d.deleted_at IS NULL AND d.status IN ('ready','processing') AND c.idx < ? ORDER BY d.id, c.idx`).all(projectId, perDoc) as any[];
   const out: Hit[] = []; let n = 0;
   for (const r of rows) { if (n + r.text.length > maxChars) break; n += r.text.length; out.push(r); }
   return out;

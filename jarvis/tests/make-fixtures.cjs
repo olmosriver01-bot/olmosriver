@@ -15,6 +15,10 @@ await p.setContent('<div style="font:28px sans-serif;padding:40px">Скан қи
 const png = await p.screenshot();
 await p.setContent(`<img src="data:image/png;base64,${png.toString('base64')}" style="width:100%">`);
 fs.writeFileSync('tests/fixtures/scan.pdf', await p.pdf({ format: 'A5' }));
+await p.setContent('<div style="width:400px;height:300px;background:#fff"></div>');
+const blank = await p.screenshot();
+await p.setContent(`<img src="data:image/png;base64,${blank.toString('base64')}" style="width:100%">`);
+fs.writeFileSync('tests/fixtures/blank.pdf', await p.pdf({ format: 'A5' }));
 await b.close();
 console.log('fixtures ok');
 })();

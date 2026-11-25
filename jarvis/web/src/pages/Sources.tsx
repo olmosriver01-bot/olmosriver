@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { get, post, put, del } from '../api';
 import { t } from '../i18n';
+import { usePollProcessing } from '../ui';
 import { useLoad, useAction, Btn, Input, Select, Empty, Alert, Drop, Modal, fmtDate, useToast } from '../ui';
 
 export function UploadBox({ projectId, onDone }: { projectId: number | null; onDone: () => void }) {
@@ -14,7 +15,7 @@ export function UploadBox({ projectId, onDone }: { projectId: number | null; onD
     files.forEach((f) => fd.append('files', f, f.name));
     const r = await run(() => post('/documents/upload', fd));
     if (r) {
-      for (const d of r) toast(`${d.name}: ${d.status === 'ready' ? `${t('ўқилди')} (${d.pages || 1} ${t('бет')}, ${d.chars} ${t('белги')})` : d.error}`, d.status === 'ready' ? 'ok' : 'err');
+      for (const d of r) toast(d.status === 'processing' ? `${d.name}: ${t('скан бетлар топилди — OCR фонда ўқимоқда…')}` : `${d.name}: ${d.status === 'ready' ? `${t('ўқилди')} (${d.pages || 1} ${t('бет')}, ${d.chars} ${t('белги')})` : d.error}`, d.status === 'ready' || d.status === 'processing' ? 'ok' : 'err');
       onDone();
     }
   };
@@ -29,17 +30,19 @@ export function UploadBox({ projectId, onDone }: { projectId: number | null; onD
 export function DocRow({ d, onChange, projects }: { d: any; onChange: () => void; projects?: any[] }) {
   const [open, setOpen] = useState<any>(null);
   const { run } = useAction();
-  const st = d.status === 'ready' ? <span className="badge b-ok">{t('ўқилди')}</span> : d.status === 'unreadable' ? <span className="badge b-err">{t('ўқилмади')}</span> : <span className="badge b-err">{t('хато')}</span>;
+  const st = d.status === 'processing' ? <span className="badge b-info">{t('OCR ўқимоқда…')}</span> : d.status === 'ready' ? <span className={`badge ${d.ocr_pages ? 'b-warn' : 'b-ok'}`}>{t(d.ocr_pages ? 'ўқилди (OCR)' : 'ўқилди')}</span> : d.status === 'unreadable' ? <span className="badge b-err">{t('ўқилмади')}</span> : <span className="badge b-err">{t('хато')}</span>;
   return <div className="item" style={{ cursor: 'default' }}>
     <div className="row between"><span className="t ell" style={{ maxWidth: '60%' }}>{d.type === 'url' ? '🔗' : '📄'} {d.name}</span>
       <span className="row">{st}<Btn sm kind="ghost" onClick={async () => setOpen(await get(`/documents/${d.id}`))}>{t('Кўриш')}</Btn>
         <Btn sm kind="ghost" onClick={async () => { if (confirm(t('Ҳужжат саватга ўтказилсинми?'))) { await run(() => del(`/documents/${d.id}`), 'Саватга ўтказилди'); onChange(); } }}>🗑</Btn></span></div>
     <div className="xs dim">{d.type.toUpperCase()}{d.pages ? ` · ${d.pages} ${t('бет')}` : ''} · {d.chars} {t('белги')} · {fmtDate(d.created_at)}{d.project_name !== undefined ? ` · ${d.project_name ?? t('Умумий')}` : ''}</div>
     {d.error && <div className="xs" style={{ color: 'var(--red)' }}>{d.error}</div>}
+    {d.warning && <div className="xs" style={{ color: 'var(--yellow)' }}>{d.warning}</div>}
     {projects && <div className="row xs" style={{ marginTop: 4 }}>{t('Лойиҳа')}: <Select value={d.project_id ?? ''} style={{ width: 'auto', minHeight: 30, padding: '2px 8px' }} onChange={async (e) => { await run(() => put(`/documents/${d.id}`, { project_id: e.target.value || null }), 'Кўчирилди'); onChange(); }} options={[['', 'Умумий'], ...projects.map((p: any) => [p.id, p.name] as [number, string])]} /></div>}
     {open && <Modal title={open.name} onClose={() => setOpen(null)} wide>
       <div className="row small" style={{ marginBottom: 8 }}>{open.url && <a href={open.url} target="_blank" rel="noopener noreferrer">{open.url}</a>}{open.file && <a href={`/api/documents/${open.id}/file`} target="_blank" rel="noopener noreferrer">{t('Асл файлни очиш')}</a>}<span className="dim">{open.chunks.length} {t('парча индексланган')}</span></div>
       {open.error && <Alert kind="err">{open.error}</Alert>}
+      {open.warning && <Alert kind="warn">{open.warning}</Alert>}
       <div className="stack">{open.chunks.map((c: any) => <div key={c.id} className="card small"><div className="xs dim">#{c.idx + 1}{c.page ? ` · ${c.page}-${t('бет')}` : ''}</div><pre>{c.text}</pre></div>)}</div>
     </Modal>}
   </div>;
@@ -49,6 +52,7 @@ export function Sources() {
   const projects = useLoad(() => get('/projects?all=1'));
   const [pid, setPid] = useState<string>('');
   const docs = useLoad(() => get(`/documents${pid ? `?project=${pid}` : ''}`), [pid]);
+  usePollProcessing(docs.data, docs.reload);
   const [q, setQ] = useState(''); const [hits, setHits] = useState<any[] | null>(null);
   const { run } = useAction();
   const scope = pid && pid !== 'none' ? Number(pid) : null;
@@ -59,7 +63,7 @@ export function Sources() {
         <div className="card stack"><h2>{t('Манба қўшиш')}</h2>
           <Select value={pid === '' ? 'none' : pid} onChange={(e) => setPid(e.target.value)} options={[['none', 'Умумий (лойиҳасиз)'], ...(projects.data ?? []).map((p: any) => [String(p.id), p.name] as [string, string])]} />
           <UploadBox projectId={scope} onDone={docs.reload} />
-          <Alert kind="info">Скан қилинган PDF (расм) ўқилмайди — бу ҳолда «ўқилмади» деб белгиланади. Ҳужжат ичидаги буйруқлар JARVIS учун кўрсатма ҳисобланмайди.</Alert>
+          <Alert kind="info">Скан PDF (расм) бетлари маҳаллий OCR билан интернетсиз ўқилади (ўзбек лотин/кирилл, рус, инглиз) ва «OCR» деб белгиланади. OCR ҳам ўқий олмаса — «ўқилмади». Ҳужжат ичидаги буйруқлар JARVIS учун кўрсатма ҳисобланмайди.</Alert>
         </div>
         <div className="card stack"><h2>{t('Манбалардан қидириш')}</h2>
           <div className="row" style={{ flexWrap: 'nowrap' }}><Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('Калит сўзлар (кирилл ёки лотин)')} onKeyDown={(e) => e.key === 'Enter' && (e.currentTarget.nextSibling as any)?.click()} />

@@ -142,3 +142,9 @@ export function Confirm({ title, text, word, onYes, onClose }: { title: string; 
     </div>
   </Modal>;
 }
+
+/** Рўйхатда «processing» ҳужжат бўлса, 3 сонияда бир янгилайди. */
+export function usePollProcessing(list: any[] | null | undefined, reload: () => void) {
+  const busy = !!list?.some((d) => d?.status === 'processing');
+  useEffect(() => { if (!busy) return; const tm = setInterval(reload, 3000); return () => clearInterval(tm); }, [busy, reload]);
+}

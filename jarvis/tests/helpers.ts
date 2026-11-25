@@ -26,7 +26,7 @@ export async function startApp(opts: { mock?: boolean } = {}) {
     return { status: res.status, data };
   }
   const login = async () => { const r = await call('POST', '/auth/setup', { password: 'parol12345' }); if (r.status !== 200) throw new Error(JSON.stringify(r)); };
-  const close = () => new Promise((r) => server.close(r));
+  const close = async () => { const { stopOcr } = await import('../server/ocr.ts'); await stopOcr(); await new Promise((r) => server.close(r)); };
   return { call, login, close, dir, setCookie: (c: string) => (cookie = c), getCookie: () => cookie };
 }
 

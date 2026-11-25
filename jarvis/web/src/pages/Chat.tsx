@@ -81,7 +81,7 @@ export function Chat({ id }: { id?: number }) {
           {conv.source_mode !== 'off' && docs.length > 0 && <details className="small"><summary className="muted" style={{ cursor: 'pointer' }}>{t('Манбалар')}: {conv.document_ids.length ? conv.document_ids.length : t('барчаси')}</summary>
             <div className="card stack" style={{ position: 'absolute', zIndex: 20, maxWidth: 360, marginTop: 6 }}>
               <div className="xs dim">{t('Белгиланмаса — лойиҳанинг барча манбалари.')}</div>
-              {docs.map((d) => <label key={d.id} className="check"><input type="checkbox" checked={conv.document_ids.includes(d.id)} disabled={d.status !== 'ready'}
+              {docs.map((d) => <label key={d.id} className="check"><input type="checkbox" checked={conv.document_ids.includes(d.id)} disabled={d.status !== 'ready' && d.status !== 'processing'}
                 onChange={(e) => update({ document_ids: e.target.checked ? [...conv.document_ids, d.id] : conv.document_ids.filter((x: number) => x !== d.id) })} />
                 <span className="ell">{d.name}{d.status !== 'ready' ? ` (${t('ўқилмаган')})` : ''}</span></label>)}</div></details>}
           <Btn sm kind="ghost" onClick={doPreview} title={t('Ташқи AI’га нима юборилади?')}>👁 {t('Нима юборилади?')}</Btn>
@@ -99,7 +99,7 @@ export function Chat({ id }: { id?: number }) {
             {m.meta?.mock && <span className="badge b-warn">MOCK — {t('ҳақиқий AI эмас')}</span>}
             {m.meta?.provider && !m.meta.mock && <span>{m.meta.provider} · {m.meta.model}{m.meta.costUsd != null ? ` · $${m.meta.costUsd.toFixed(4)}` : ''}</span>}
             {m.meta?.local && <span className="badge">{t('AI чақирилмади')}</span>}
-            {m.citations?.filter((c: any) => c.cited).map((c: any) => <span key={c.n} className="cite" onClick={() => setCite(c)}>S{c.n}: {c.docName}{c.page ? `, ${c.page}-${t('бет')}` : ''}</span>)}
+            {m.citations?.filter((c: any) => c.cited).map((c: any) => <span key={c.n} className="cite" onClick={() => setCite(c)}>S{c.n}: {c.docName}{c.page ? `, ${c.page}-${t('бет')}` : ''}{c.ocr ? ' (OCR)' : ''}</span>)}
             {m.citations?.length > 0 && !m.citations.some((c: any) => c.cited) && <span className="badge">{t('Манба белгиланмаган')}</span>}
             {!m.meta?.error && <Btn sm kind="ghost" onClick={() => setSaveMsg(m)}>💾 {t('Сақлаш')}</Btn>}
             {!m.meta?.error && <Btn sm kind="ghost" onClick={() => navigator.clipboard?.writeText(m.content)}>⧉</Btn>}
@@ -128,7 +128,7 @@ export function Chat({ id }: { id?: number }) {
       <pre className="card" style={{ marginTop: 10, maxHeight: 380, overflow: 'auto' }}>{preview.system}</pre>
     </Modal>}
     {cite && <Modal title={`S${cite.n}: ${cite.docName}`} onClose={() => setCite(null)}>
-      <div className="row small muted" style={{ marginBottom: 8 }}>{cite.page && <span className="badge b-info">{cite.page}-{t('бет')}</span>}{cite.url && <a href={cite.url} target="_blank" rel="noopener noreferrer">{cite.url}</a>}
+      <div className="row small muted" style={{ marginBottom: 8 }}>{cite.page && <span className="badge b-info">{cite.page}-{t('бет')}</span>}{cite.ocr && <span className="badge b-warn">OCR — {t('хато бўлиши мумкин')}</span>}{cite.url && <a href={cite.url} target="_blank" rel="noopener noreferrer">{cite.url}</a>}
         {cite.docType !== 'url' && <a href={`/api/documents/${cite.documentId}/file`} target="_blank" rel="noopener noreferrer">{t('Файлни очиш')}</a>}</div>
       <pre className="card">{cite.snippet}</pre>
     </Modal>}

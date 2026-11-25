@@ -3,6 +3,7 @@ import { createApp } from './app.ts';
 import { schedulerTick } from './tasks.ts';
 import { createBackup, listBackups } from './backup.ts';
 import { tashkentParts, log } from './db.ts';
+import { resumeOcr } from './docs.ts';
 
 const app = createApp();
 const port = Number(process.env.PORT || 3333);
@@ -23,4 +24,5 @@ function tick() {
   } catch (e: any) { console.error('[scheduler] error:', e.message); }
 }
 setTimeout(tick, 3000);
+resumeOcr().catch((e) => console.error('[ocr] resume:', e.message));
 setInterval(tick, 30000);

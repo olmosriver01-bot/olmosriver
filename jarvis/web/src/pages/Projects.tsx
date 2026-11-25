@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { get, post, put, del, download } from '../api';
 import { go } from '../App';
 import { t } from '../i18n';
+import { usePollProcessing } from '../ui';
 import { useLoad, useAction, Btn, Field, Input, Area, Empty, Alert, KindBadge, fmtDate, fmtDay, STATUS, Confirm, Modal } from '../ui';
 import { UploadBox, DocRow } from './Sources';
 
@@ -36,6 +37,7 @@ export function Projects({ id }: { id?: number }) {
 function ProjectDetail({ id, onChange }: { id: number; onChange: () => void }) {
   const { data: p, reload, error } = useLoad(() => get(`/projects/${id}`), [id]);
   const [form, setForm] = useState<any>(null);
+  usePollProcessing(p?.documents, reload);
   const [confirmDel, setConfirmDel] = useState(false);
   const { busy, run } = useAction();
   useEffect(() => { if (p) setForm(Object.fromEntries(['name', ...FIELDS.map((f) => f[0])].map((k) => [k, p[k] ?? '']))); }, [p]);

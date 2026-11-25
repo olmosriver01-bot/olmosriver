@@ -40,6 +40,10 @@ test('лойиҳа кирилл ва лотин матн билан яратил
 });
 
 let docId = 0;
+async function waitDoc(id: number) {
+  for (let i = 0; i < 120; i++) { const d = (await call('GET', `/documents/${id}`)).data; if (d.status !== 'processing') return d; await new Promise((r) => setTimeout(r, 500)); }
+  throw new Error('OCR timeout');
+}
 test('PDF ўқилади, бетлар тўғри, скан PDF «ўқилмади» деб белгиланади, TXT/MD ишлайди', async () => {
   const up = await call('POST', '/documents/upload', fileForm({ project_id: String(projectId) }, [{ name: 'ҳисобот.pdf', content: fixture('text.pdf') }]));
   assert.equal(up.status, 200, JSON.stringify(up.data));
@@ -47,8 +51,15 @@ test('PDF ўқилади, бетлар тўғри, скан PDF «ўқилмад
   assert.equal(d.name, 'ҳисобот.pdf');
   assert.equal(d.status, 'ready'); assert.equal(d.pages, 3);
   docId = d.id;
-  const scan = (await call('POST', '/documents/upload', fileForm({ project_id: String(projectId) }, [{ name: 'scan.pdf', content: fixture('scan.pdf') }]))).data[0];
-  assert.equal(scan.status, 'unreadable'); assert.match(scan.error, /скан/);
+  // Скан PDF: фонда маҳаллий OCR (интернетсиз) билан ўқилади ва «OCR» деб белгиланади
+  const scan0 = (await call('POST', '/documents/upload', fileForm({ project_id: String(projectId) }, [{ name: 'scan.pdf', content: fixture('scan.pdf') }]))).data[0];
+  assert.equal(scan0.status, 'processing');
+  const scan = await waitDoc(scan0.id);
+  assert.equal(scan.status, 'ready', JSON.stringify(scan)); assert.equal(scan.ocr_pages, 1); assert.match(scan.warning, /OCR/);
+  assert.ok(scan.chunks.some((c: any) => /Скан/.test(c.text) && c.page === 1), JSON.stringify(scan.chunks));
+  // Бўш скан: OCR ҳам матн топмайди → «ўқилмади», ўқилгандек кўрсатилмайди
+  const blank = await waitDoc((await call('POST', '/documents/upload', fileForm({ project_id: String(projectId) }, [{ name: 'blank.pdf', content: fixture('blank.pdf') }]))).data[0].id);
+  assert.equal(blank.status, 'unreadable'); assert.match(blank.error, /ўқилмади/);
   const md = (await call('POST', '/documents/upload', fileForm({ project_id: String(otherId) }, [{ name: 'eslatma.md', content: '# Boshqa\nBoshqa loyiha narxi 999 000 so‘m. Мижозлар аудитория.' }]))).data[0];
   assert.equal(md.status, 'ready');
   const bad = await call('POST', '/documents/upload', fileForm({}, [{ name: 'x.exe', content: 'x' }]));
@@ -62,7 +73,7 @@ test('қидирув бет рақамини беради, кирилл↔лот
   assert.equal(r[0].docName, 'ҳисобот.pdf');
   const lat = (await call('GET', `/search?q=${encodeURIComponent('auditoriya mijozlar')}&project=${projectId}`)).data;
   assert.ok(lat.some((h: any) => h.page === 2), 'лотин сўров кирилл матнни топиши керак');
-  assert.ok(lat.every((h: any) => h.documentId === docId));
+  assert.ok(lat.every((h: any) => h.docName !== 'eslatma.md'));
   const other = (await call('GET', `/search?q=${encodeURIComponent('narxi')}&project=${otherId}`)).data;
   assert.ok(other.length > 0 && other.every((h: any) => h.docName === 'eslatma.md'));
 });
