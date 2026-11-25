@@ -90,7 +90,7 @@ JARVIS сервер жараёни ичида ҳар 30 сонияда ишла�
 
 ## Тестлар
 ```bash
-npm test             # 27 та backend тести (сохта провайдер ва маҳаллий сохта HTTP сервер билан)
+npm test             # 36 та backend тести (сохта провайдер ва маҳаллий сохта HTTP сервер билан)
 npm run typecheck
 # Браузер тести (Chromium/Playwright керак):
 JARVIS_DATA_DIR=/tmp/jarvis-e2e JARVIS_ENABLE_MOCK=1 PORT=3410 npm run serve &

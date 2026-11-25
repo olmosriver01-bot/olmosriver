@@ -5,6 +5,7 @@ import net from 'node:net';
 import { getDb, now, UPLOADS_DIR, HttpError, log } from './db.ts';
 import { normalize, tokens } from '../shared/translit.ts';
 import { ocrAvailable, ocrPdf } from './ocr.ts';
+import { registerBusyCheck } from './backup.ts';
 
 export type Page = { page: number | null; text: string };
 
@@ -99,6 +100,7 @@ export async function addFile(projectId: number | null, originalName: string, bu
 
 export const OCR_MAX_PAGES = 60;
 const ocrJobs = new Map<number, Promise<void>>();
+registerBusyCheck(() => (ocrJobs.size ? `OCR: ${ocrJobs.size}` : null));
 export const waitOcr = (id: number) => ocrJobs.get(id) ?? Promise.resolve();
 /** Матн қатлами йўқ бетларни фонда OCR қилиш. Натижа «OCR» деб белгиланади. */
 function runOcr(documentId: number, buf: Buffer, emptyPages: number[]) {
@@ -151,26 +153,64 @@ export function htmlToText(html: string) {
     .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'")
     .replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n\n').trim();
 }
+const MAX_URL_BYTES = 5_000_000;
+/**
+ * Хавфсиз веб-юклаш: ҳар бир редирект қадамида манзил қайта текширилади; DNS жавоби уланиш пайтида
+ * (lookup ичида) текширилади — DNS rebinding орқали ички тармоққа ўтиб бўлмайди; ҳажм оқим пайтида чекланади.
+ */
+export async function safeFetch(rawUrl: string, opts: { allowPrivate?: boolean; maxRedirects?: number; timeoutMs?: number } = {}) {
+  const allowPrivate = opts.allowPrivate ?? !!process.env.JARVIS_ALLOW_PRIVATE_URLS;
+  let url = rawUrl;
+  for (let hop = 0; hop <= (opts.maxRedirects ?? 5); hop++) {
+    let u: URL;
+    try { u = new URL(url); } catch { throw new HttpError(400, 'URL нотўғри.'); }
+    if (!['http:', 'https:'].includes(u.protocol)) throw new HttpError(400, 'Фақат http/https манзиллар.');
+    const host = u.hostname.replace(/^\[|\]$/g, '');
+    if (!allowPrivate && net.isIP(host) && isPrivate(host)) throw new HttpError(400, 'Ички тармоқ манзилларига рухсат йўқ.');
+    const lib = u.protocol === 'https:' ? await import('node:https') : await import('node:http');
+    const lookup = (hostname: string, o: any, cb: any) => {
+      dns.lookup(hostname, { all: true }).then((addrs) => {
+        if (!addrs.length) return cb(new HttpError(400, 'Сайт манзили топилмади.'));
+        if (!allowPrivate && addrs.some((a) => isPrivate(a.address))) return cb(new HttpError(400, 'Ички тармоқ манзилларига рухсат йўқ.'));
+        if (o?.all) cb(null, addrs); else cb(null, addrs[0].address, addrs[0].family);
+      }, (e) => cb(e));
+    };
+    const res: any = await new Promise((resolve, reject) => {
+      const rq = lib.request(u, { method: 'GET', lookup, headers: { 'user-agent': 'JarvisPersonal/1.0', accept: 'text/html,text/plain,*/*' }, timeout: opts.timeoutMs ?? 20000 }, resolve);
+      rq.on('timeout', () => rq.destroy(new Error('timeout')));
+      rq.on('error', reject);
+      rq.end();
+    });
+    if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+      res.resume();
+      url = new URL(res.headers.location, u).toString();
+      continue;
+    }
+    if (res.statusCode >= 400) { res.resume(); throw new Error(`HTTP ${res.statusCode}`); }
+    const chunks: Buffer[] = []; let size = 0;
+    await new Promise<void>((resolve, reject) => {
+      res.on('data', (c: Buffer) => { size += c.length; if (size > MAX_URL_BYTES) { res.destroy(); reject(new Error('саҳифа жуда катта (5 МБ дан ортиқ)')); } else chunks.push(c); });
+      res.on('end', resolve); res.on('error', reject);
+    });
+    return { url, contentType: String(res.headers['content-type'] || ''), text: Buffer.concat(chunks).toString('utf8') };
+  }
+  throw new Error('жуда кўп редирект');
+}
+
 export async function addUrl(projectId: number | null, rawUrl: string) {
   let u: URL;
   try { u = new URL(rawUrl); } catch { throw new HttpError(400, 'URL нотўғри.'); }
   if (!['http:', 'https:'].includes(u.protocol)) throw new HttpError(400, 'Фақат http/https манзиллар.');
-  if (!process.env.JARVIS_ALLOW_PRIVATE_URLS) {
-    const addrs = net.isIP(u.hostname) ? [{ address: u.hostname }] : await dns.lookup(u.hostname, { all: true }).catch(() => []);
-    if (!addrs.length) throw new HttpError(400, 'Сайт манзили топилмади.');
-    if (addrs.some((a) => isPrivate(a.address))) throw new HttpError(400, 'Ички тармоқ манзилларига рухсат йўқ.');
-  }
   let pages: Page[] = [], error: string | undefined, title = u.hostname + u.pathname;
   try {
-    const res = await fetch(u, { signal: AbortSignal.timeout(20000), headers: { 'user-agent': 'JarvisPersonal/1.0' }, redirect: 'follow' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const ct = res.headers.get('content-type') || '';
-    const raw = await res.text();
-    if (raw.length > 5_000_000) throw new Error('саҳифа жуда катта');
-    const m = raw.match(/<title[^>]*>([^<]{1,200})<\/title>/i);
+    const r = await safeFetch(u.toString());
+    const m = r.text.match(/<title[^>]*>([^<]{1,200})<\/title>/i);
     if (m) title = htmlToText(m[1]);
-    pages = [{ page: null, text: ct.includes('html') || /^\s*</.test(raw) ? htmlToText(raw) : raw }];
-  } catch (e: any) { error = 'Саҳифани юклаб бўлмади: ' + (e?.message || e); }
+    pages = [{ page: null, text: r.contentType.includes('html') || /^\s*</.test(r.text) ? htmlToText(r.text) : r.text }];
+  } catch (e: any) {
+    if (e instanceof HttpError && e.status === 400) throw e;
+    error = 'Саҳифани юклаб бўлмади: ' + (e?.message || e);
+  }
   return insertDoc({ projectId, name: title, type: 'url', url: u.toString(), pages, error });
 }
 

@@ -57,7 +57,7 @@ export function saveAiSettings(patch: Partial<AiSettings>) {
 
 // ---- калитлар: фақат серверда, шифрланган ----
 export function getKey(p: ProviderId): string | null {
-  if (p === 'mock') return null;
+  if (p === 'mock' || !(p in PROVIDERS)) return null;
   const blob = getSetting<string | null>(`key.${p}`, null);
   if (blob) return decrypt(blob);
   return process.env[PROVIDERS[p].envKey] || null;

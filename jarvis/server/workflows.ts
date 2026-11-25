@@ -5,6 +5,7 @@ import { personalContext, createNote } from './memory.ts';
 import { projectCard, getProject } from './projects.ts';
 import { BASE_RULES, SOURCE_RULES, formatSources, citationsFrom } from './chat.ts';
 import { ROLES } from './seed.ts';
+import { registerBusyCheck } from './backup.ts';
 
 type Step = { key: string; name: string; status: 'pending' | 'running' | 'done' | 'error' | 'needs_input'; output?: string; error?: string; at?: string; ai?: boolean; meta?: any };
 type Def = { name: string; folder: string; needsProject: boolean; needsInput: boolean; steps: { key: string; name: string; ai: boolean; role?: string; ask?: string }[] };
@@ -102,6 +103,7 @@ function gatherSources(run: any, query: string): Hit[] {
 }
 
 const running = new Set<number>();
+registerBusyCheck(() => (running.size ? `жараён: ${running.size}` : null));
 
 /** Жараённи бажариш ёки давом эттириш: фақат бажарилмаган қадамлар ишлайди, тайёр натижалар сақланиб қолади. */
 export async function executeRun(id: number, answers?: string) {
@@ -117,8 +119,9 @@ export async function executeRun(id: number, answers?: string) {
       const chk = steps.find((s) => s.key === 'check')!; chk.status = 'pending';
     }
     saveRun(id, { status: 'running' });
-    const profile = personalContext(run.project_id);
-    const project = projectCard(run.project_id);
+    let profile = '', project = '';
+    try { profile = personalContext(run.project_id); project = projectCard(run.project_id); }
+    catch (e: any) { saveRun(id, { status: 'error' }); throw e; }
     let hits: Hit[] = [];
     for (let i = 0; i < steps.length; i++) {
       const st = steps[i]; const sd = def.steps[i];

@@ -98,7 +98,11 @@ export function createRecurring(d: any) {
   return Number(r.lastInsertRowid);
 }
 export function updateRecurring(id: number, d: any) {
-  const o = cleanRec(d, true); const k = Object.keys(o);
+  const o = cleanRec(d, true);
+  const cur = getDb().prepare('SELECT enabled FROM recurring WHERE id = ?').get(id) as any;
+  // Қайта ёқилганда эски (ўчиқ пайтдаги) слотлар «ўтказиб юборилди» ёки «кечикиб» бажарилмайди
+  if (o.enabled === 1 && cur && !cur.enabled) o.enabled_at = now();
+  const k = Object.keys(o);
   if (k.length) getDb().prepare(`UPDATE recurring SET ${k.map((x) => `${x}=?`).join(',')} WHERE id=?`).run(...k.map((x) => o[x]), id);
 }
 export function deleteRecurring(id: number) { getDb().prepare('UPDATE recurring SET deleted_at=? WHERE id=?').run(now(), id); }
@@ -143,7 +147,8 @@ export function schedulerTick(at = new Date()) {
   setSetting('scheduler.lastTick', at.toISOString());
   for (const r of db.prepare('SELECT * FROM recurring WHERE enabled = 1 AND deleted_at IS NULL').all() as any[]) {
     const last = db.prepare('SELECT MAX(slot) s FROM job_runs WHERE recurring_id = ?').get(r.id) as any;
-    const from = last?.s ? tashkentToDate(last.s) : new Date(Date.parse(r.created_at));
+    let from = last?.s ? tashkentToDate(last.s) : new Date(Date.parse(r.created_at));
+    if (r.enabled_at && Date.parse(r.enabled_at) > from.getTime()) from = new Date(Date.parse(r.enabled_at));
     const slots = slotsBetween(r, from, at);
     if (!slots.length) continue;
     const latest = slots[slots.length - 1];

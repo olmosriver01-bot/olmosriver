@@ -93,6 +93,7 @@ export function updateNote(id: number, d: any, reason = 'таҳрир'): Note {
 }
 
 export function setDecisionStatus(id: number, status: 'accepted' | 'rejected' | 'draft') {
+  if (!['accepted', 'rejected', 'draft'].includes(status)) throw new HttpError(400, 'Қарор ҳолати нотўғри.');
   const n = getNote(id);
   if (n.kind !== 'decision') throw new HttpError(400, 'Бу ёзув қарор эмас.');
   const folder = status === 'accepted' ? '09_DECISIONS' : n.folder;
@@ -156,7 +157,11 @@ export function resetSkipped() { const st = getInterview(); st.skipped = []; set
 function upsertSystemNote(key: string, folder: string, title: string, body: string, kind = 'fact') {
   const db = getDb();
   const ex = db.prepare('SELECT * FROM notes WHERE system_key = ?').get(key) as Note | undefined;
-  if (ex) return updateNote(ex.id, { title, body, folder, kind }, 'интервьюдан қайта яратилди');
+  if (ex) {
+    if (ex.deleted_at) db.prepare('UPDATE notes SET deleted_at = NULL WHERE id = ?').run(ex.id);
+    if (ex.status === 'archived') db.prepare("UPDATE notes SET status = 'active' WHERE id = ?").run(ex.id);
+    return updateNote(ex.id, { title, body, folder, kind }, 'интервьюдан қайта яратилди');
+  }
   return createNote({ folder, title, body, kind, source: 'Танишув интервьюси', system_key: key }, 'system');
 }
 

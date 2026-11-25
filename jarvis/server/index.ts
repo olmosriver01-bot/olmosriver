@@ -2,7 +2,7 @@ import './env.ts';
 import { createApp } from './app.ts';
 import { schedulerTick } from './tasks.ts';
 import { createBackup, listBackups } from './backup.ts';
-import { tashkentParts, log } from './db.ts';
+import { tashkentParts, log, getSetting, setSetting } from './db.ts';
 import { resumeOcr } from './docs.ts';
 
 const app = createApp();
@@ -18,9 +18,11 @@ function tick() {
     const r = schedulerTick();
     if (r.length) console.log('[scheduler]', r.map((x) => `${x.slot} ${x.status}`).join(', '));
     // Кунлик автоматик backup (Тошкент вақти бўйича кунига бир марта)
-    const today = tashkentParts(new Date()).date.replace(/-/g, '');
-    if (!listBackups().some((b) => b.name.includes('-auto') && b.name.slice(7, 17).replace(/-/g, '') === today))
-      createBackup('auto').catch((e) => log('backup_error', 'backup', '', e.message));
+    const today = tashkentParts(new Date()).date;
+    if (getSetting<string | null>('backup.lastAutoDate', null) !== today) {
+      setSetting('backup.lastAutoDate', today); // аввал белгиланади — параллел/такрорий ишга тушмайди
+      createBackup('auto').catch((e) => { setSetting('backup.lastAutoDate', null); log('backup_error', 'backup', '', e.message); });
+    }
   } catch (e: any) { console.error('[scheduler] error:', e.message); }
 }
 setTimeout(tick, 3000);

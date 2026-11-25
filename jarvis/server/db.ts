@@ -30,7 +30,7 @@ export function openDb(): Database.Database {
 export function getDb(): Database.Database { return db ?? openDb(); }
 export function closeDb() { if (db) { db.close(); db = null; } }
 
-function migrate(d: Database.Database) {
+export function migrate(d: Database.Database) {
   d.exec('CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)');
   const dir = path.join(here, 'migrations');
   const done = new Set(d.prepare('SELECT name FROM _migrations').all().map((r: any) => r.name));

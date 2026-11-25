@@ -49,7 +49,8 @@ export function restoreProject(id: number) {
 }
 export function projectCard(id: number | null) {
   if (!id) return '';
-  const p = getProject(id);
+  const p = getDb().prepare('SELECT * FROM projects WHERE id = ?').get(id) as any;
+  if (!p) return '';
   const line = (k: string, v: string) => (v?.trim() ? `- ${k}: ${v.trim()}` : `- ${k}: (киритилмаган)`);
   return [`Лойиҳа: ${p.name}`, line('Мақсад', p.goal), line('Аудитория', p.audience), line('Таклиф (offer)', p.offer), line('KPI', p.kpi), line('Материаллар', p.materials), line('Кейинги қадамлар', p.next_steps)].join('\n');
 }

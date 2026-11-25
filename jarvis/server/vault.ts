@@ -67,10 +67,30 @@ export function syncVault() {
   // 1) JARVIS ёзувлари → vault
   const notes = db.prepare('SELECT * FROM notes WHERE deleted_at IS NULL').all() as Note[];
   const openConflicts = new Set((db.prepare('SELECT note_id FROM vault_conflicts WHERE resolved_at IS NULL').all() as any[]).map((r) => r.note_id));
+  const taken = new Map<string, number>(); // vault_path(lower) → note id
+  for (const n of notes) if (n.vault_path) taken.set(n.vault_path.toLowerCase(), n.id);
+  /** Ҳар бир ёзув учун ноёб файл йўли: бошқа ёзувга ёки фойдаланувчининг файлига тегишли бўлса — « (2)» қўшимчаси. */
+  const assignPath = (n: Note) => {
+    const base = notePath(n);
+    for (let i = 1; i < 500; i++) {
+      const cand = i === 1 ? base : base.replace(/\.md$/, ` (${i}).md`);
+      const owner = taken.get(cand.toLowerCase());
+      if (owner !== undefined && owner !== n.id) continue;
+      const abs = safe(cand);
+      if (fs.existsSync(abs)) {
+        const { meta } = parseFrontmatter(fs.readFileSync(abs, 'utf8'));
+        if (Number(meta.jarvis_id) !== n.id) continue; // бошқа ёзув ёки қўлда ёзилган файл — устидан ёзмаймиз
+      }
+      taken.set(cand.toLowerCase(), n.id);
+      db.prepare('UPDATE notes SET vault_path = ? WHERE id = ?').run(cand, n.id);
+      return cand;
+    }
+    throw new Error('ноёб файл номи топилмади');
+  };
   for (const n of notes) {
     try {
       if (openConflicts.has(n.id)) { report.conflicts++; continue; }
-      const rel = n.vault_path ?? notePath(n);
+      const rel = n.vault_path ?? assignPath(n);
       const abs = safe(rel);
       const content = noteToMarkdown(n);
       if (fs.existsSync(abs)) {
@@ -121,14 +141,17 @@ export function syncVault() {
     } catch (e: any) { report.errors.push(`${rel}: ${e.message}`); }
   }
   // 3) лойиҳа карталари (фақат JARVIS → vault, зиддият текшируви билан)
-  for (const p of db.prepare('SELECT * FROM projects WHERE deleted_at IS NULL').all() as any[]) {
+  const projPaths = new Set<string>();
+  for (const p of db.prepare('SELECT * FROM projects WHERE deleted_at IS NULL ORDER BY id').all() as any[]) {
     try {
-      const rel = `03_PROJECTS/PROJECT — ${p.name.replace(/[\\/:*?"<>|]/g, ' ')}.md`;
+      let rel = `03_PROJECTS/PROJECT — ${p.name.replace(/[\\/:*?"<>|]/g, ' ').trim()}.md`;
+      if (projPaths.has(rel.toLowerCase())) rel = rel.replace(/\.md$/, ` (${p.id}).md`);
+      projPaths.add(rel.toLowerCase());
       const abs = safe(rel); const content = projectToMarkdown(p);
       if (fs.existsSync(abs)) {
         const h = md5(fs.readFileSync(abs, 'utf8'));
-        if (h === md5(content)) continue;
-        if (p.vault_hash && h !== p.vault_hash) { report.errors.push(`${rel}: vault’да қўлда ўзгартирилган — устидан ёзилмади. Markdown импорт орқали олинг.`); continue; }
+        if (h === md5(content)) { if (p.vault_hash !== h) db.prepare('UPDATE projects SET vault_hash=? WHERE id=?').run(h, p.id); continue; }
+        if (!p.vault_hash || h !== p.vault_hash) { report.errors.push(`${rel}: vault’да қўлда ўзгартирилган — устидан ёзилмади. Markdown импорт орқали олинг.`); continue; }
       }
       writeFile(rel, content);
       db.prepare('UPDATE projects SET vault_hash=? WHERE id=?').run(md5(content), p.id);

@@ -106,7 +106,9 @@ export function importMarkdownFile(path: string, text: string, res: ImportResult
     source: meta.source || `Markdown импорт: ${path}`, source_ref: meta.source_ref || '', status: meta.status === 'archived' || folder === '10_ARCHIVE' ? 'archived' : 'active' };
   if (!(FOLDERS as readonly string[]).includes(data.folder)) data.folder = '00_INBOX';
   const id = Number(meta.jarvis_id);
-  const ex = id ? (getDb().prepare('SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL').get(id) as Note | undefined) : undefined;
+  let ex = id ? (getDb().prepare('SELECT * FROM notes WHERE id = ? AND deleted_at IS NULL').get(id) as Note | undefined) : undefined;
+  // jarvis_id бошқа JARVIS’дан ёки нусхаланган файлдан бўлиши мумкин — сарлавҳа ёки яратилган вақт мос келсагина бир хил ёзув деб ҳисоблаймиз
+  if (ex && ex.title !== title && !(meta.created && meta.created === ex.created_at)) ex = undefined;
   if (ex) {
     if (ex.body.trim() === data.body.trim() && ex.title === data.title && ex.kind === data.kind && ex.status === data.status) { res.unchanged++; return; }
     const { kind: k, ...rest } = data;

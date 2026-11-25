@@ -2,7 +2,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
 import Database from 'better-sqlite3';
-import { getDb, closeDb, openDb, DATA_DIR, UPLOADS_DIR, BACKUPS_DIR, DB_FILE, now, HttpError, log } from './db.ts';
+import { getDb, closeDb, openDb, migrate, DATA_DIR, UPLOADS_DIR, BACKUPS_DIR, DB_FILE, now, HttpError, log } from './db.ts';
+
+/** Фонда ишлаётган ишлар (OCR, AI жараён, оқимли чат) — тиклаш пайтида эски ID’лар билан янги базага ёзмаслиги учун. */
+const busyChecks: (() => string | null)[] = [];
+export function registerBusyCheck(fn: () => string | null) { busyChecks.push(fn); }
 
 /** Тўлиқ backup: база (онлайн snapshot) + юкланган файллар → zip. Шифрлаш калити (secret.key) алоҳида — қуйида изоҳ. */
 export async function createBackup(label = 'manual') {
@@ -25,9 +29,11 @@ export function listBackups() {
   return fs.readdirSync(BACKUPS_DIR).filter((f) => /^jarvis-.*\.zip$/.test(f)).sort().reverse()
     .map((f) => ({ name: f, size: fs.statSync(path.join(BACKUPS_DIR, f)).size }));
 }
-function pruneBackups(keepAuto = 14) {
-  const auto = listBackups().filter((b) => b.name.includes('-auto') || b.name.includes('-pre-'));
-  for (const b of auto.slice(keepAuto)) fs.rmSync(path.join(BACKUPS_DIR, b.name), { force: true });
+/** Автоматик ва «pre-*» backup’лар алоҳида гуруҳларда тозаланади; қўлда олинганлари ўчирилмайди. */
+function pruneBackups() {
+  const all = listBackups();
+  for (const [re, keep] of [[/-auto\.zip$/, 14], [/-pre-restore\.zip$/, 10], [/-pre-import\.zip$/, 10]] as [RegExp, number][])
+    for (const b of all.filter((x) => re.test(x.name)).slice(keep)) fs.rmSync(path.join(BACKUPS_DIR, b.name), { force: true });
 }
 export function backupPath(name: string) {
   if (!/^jarvis-[\w.-]+\.zip$/.test(name)) throw new HttpError(400, 'Backup номи нотўғри.');
@@ -38,6 +44,8 @@ export function backupPath(name: string) {
 
 /** Тиклаш: аввал жорий ҳолат "pre-restore" сифатида сақланади, кейин база ва файллар алмаштирилади. */
 export async function restoreBackup(source: string | Buffer) {
+  const busy = busyChecks.map((f) => f()).filter(Boolean);
+  if (busy.length) throw new HttpError(409, `Ҳозир фонда иш бажарилмоқда (${busy.join(', ')}). У тугагач қайта уриниб кўринг.`, 'busy');
   const zip = new AdmZip(typeof source === 'string' ? backupPath(source) : source);
   const dbEntry = zip.getEntry('jarvis.db');
   if (!dbEntry) throw new HttpError(400, 'Архивда jarvis.db йўқ — бу JARVIS backup’и эмас.');
@@ -46,8 +54,12 @@ export async function restoreBackup(source: string | Buffer) {
   try {
     const t = new Database(tmp, { readonly: true });
     const ok = t.prepare("SELECT name FROM sqlite_master WHERE name IN ('notes','projects')").all().length === 2;
+    const integrity = (t.prepare('PRAGMA integrity_check').get() as any)?.integrity_check;
     t.close();
     if (!ok) throw new Error('jadvallar topilmadi');
+    if (integrity !== 'ok') throw new Error('integrity_check: ' + integrity);
+    // Миграцияларни вақтинча нусхада синаймиз — хато бўлса жорий база алмаштирилмайди
+    const m = new Database(tmp); migrate(m); m.close();
   } catch (e: any) { fs.rmSync(tmp, { force: true }); throw new HttpError(400, 'Backup базаси шикастланган: ' + e.message); }
   const pre = await createBackup('pre-restore');
   closeDb();

@@ -195,7 +195,7 @@ export function createApp() {
   }));
   api.get('/documents/:id/file', h((req, res) => {
     const d = docs.getDoc(id(req));
-    if (!d?.file) throw new HttpError(404, 'Файл йўқ.');
+    if (!d?.file || d.deleted_at) throw new HttpError(404, 'Файл йўқ.');
     const p = path.join(UPLOADS_DIR, path.basename(d.file));
     res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(d.name)}`);
     res.sendFile(p);

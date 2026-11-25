@@ -3,6 +3,7 @@ import { complete, aiSettings, resolveProvider, type ProviderId, type ChatMsg } 
 import { search, type Hit } from './docs.ts';
 import { personalContext } from './memory.ts';
 import { projectCard } from './projects.ts';
+import { registerBusyCheck } from './backup.ts';
 
 export const NOT_FOUND = 'Манбаларда топилмади.';
 
@@ -46,7 +47,10 @@ function cleanConv(d: any) {
   if (d.title !== undefined) out.title = String(d.title || 'Янги суҳбат').slice(0, 200);
   if (d.project_id !== undefined) out.project_id = d.project_id ? Number(d.project_id) : null;
   if (d.role_id !== undefined) out.role_id = d.role_id ? Number(d.role_id) : null;
-  if (d.provider !== undefined) out.provider = d.provider || null;
+  if (d.provider !== undefined) {
+    if (d.provider && !['anthropic', 'openai', 'google', 'mock'].includes(d.provider)) throw new HttpError(400, 'Провайдер нотўғри.');
+    out.provider = d.provider || null;
+  }
   if (d.model !== undefined) out.model = d.model || null;
   if (d.source_mode !== undefined) { if (!['off', 'assist', 'strict'].includes(d.source_mode)) throw new HttpError(400, 'Манба режими нотўғри.'); out.source_mode = d.source_mode; }
   if (d.document_ids !== undefined) out.document_ids = JSON.stringify((d.document_ids || []).map(Number).filter(Number.isInteger));
@@ -107,7 +111,13 @@ export function buildContext(conv: any, question: string) {
   return { system, history, hits, summary };
 }
 
+let activeChats = 0;
+registerBusyCheck(() => (activeChats ? `AI суҳбат: ${activeChats}` : null));
 export async function sendMessage(convId: number, text: string, onDelta?: (t: string) => void) {
+  activeChats++;
+  try { return await sendMessageInner(convId, text, onDelta); } finally { activeChats--; }
+}
+async function sendMessageInner(convId: number, text: string, onDelta?: (t: string) => void) {
   const conv = getConversation(convId);
   const question = String(text ?? '').normalize('NFC').trim();
   if (!question) throw new HttpError(400, 'Хабар бўш.');
