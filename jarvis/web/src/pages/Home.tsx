@@ -1,11 +1,26 @@
-import React from 'react';
-import { get } from '../api';
+import React, { useState } from 'react';
+import { get, post } from '../api';
 import { go } from '../App';
 import { t } from '../i18n';
-import { useLoad, Btn, Alert, Empty, KindBadge, fmtDate, fmtDay, PRIORITY, FOLDER_LABEL } from '../ui';
+import { useAction, Area, useLoad, Btn, Alert, Empty, KindBadge, fmtDate, fmtDay, PRIORITY, FOLDER_LABEL } from '../ui';
+
+function QuickInbox({ onSaved }: { onSaved: () => void }) {
+  const [text, setText] = useState('');
+  const { busy, run } = useAction();
+  const save = async () => {
+    const title = text.split('\n')[0].slice(0, 80);
+    const r = await run(() => post('/notes', { folder: '00_INBOX', title, body: text, source: 'Тезкор ёзув' }), '00_INBOX’га сақланди');
+    if (r) { setText(''); onSaved(); }
+  };
+  return <div className="card stack" style={{ marginBottom: 14 }}>
+    <div className="row between"><h2 style={{ margin: 0 }}>{t('Тезкор ёзув (00_INBOX)')}</h2><span className="xs dim">{t('Ғоя, фикр ёки эслатма — кейин саралайсиз')}</span></div>
+    <Area rows={2} value={text} onChange={(e) => setText(e.target.value)} placeholder={t('Ёзинг… (⌘/Ctrl+Enter — сақлаш)')} onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && text.trim()) save(); }} />
+    <div className="row"><Btn kind="primary" sm disabled={busy || !text.trim()} onClick={save}>Сақлаш</Btn></div>
+  </div>;
+}
 
 export function Home() {
-  const { data: d, error } = useLoad(() => get('/dashboard'));
+  const { data: d, error, reload } = useLoad(() => get('/dashboard'));
   if (error) return <div className="page"><Alert kind="err">{error}</Alert></div>;
   if (!d) return <div className="page muted">{t('Юкланмоқда…')}</div>;
   const ai = d.integrations.ai; const u = d.integrations.usage;
@@ -23,6 +38,8 @@ export function Home() {
       <div className="card"><div className="muted small">{t('AI сўровлар (ой)')}</div><div className="stat">{u.monthRequests}</div><span className="xs dim">${u.monthCostUsd.toFixed(4)} / ${d.integrations.limits.monthlyBudgetUsd || '∞'}</span></div>
       <div className="card"><div className="muted small">{t('Охирги backup')}</div><div className="small" style={{ marginTop: 6 }}>{d.integrations.backups[0]?.name.slice(7, 26) ?? t('ҳали йўқ')}</div></div>
     </div>
+
+    <QuickInbox onSaved={reload} />
 
     {(() => { const done = d.checklist.filter((c: any) => c.done).length; const pct = Math.round((done / d.checklist.length) * 100); return pct < 100 && <div className="card" style={{ marginBottom: 14 }}>
       <div className="row between"><h2 style={{ margin: 0 }}>{t('Тизим тайёрлиги (PDF checklist)')}</h2><b>{pct} / 100</b></div>

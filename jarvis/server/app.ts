@@ -47,9 +47,22 @@ function checklist() {
   return items.map(([label, done, link]) => ({ label, done, link }));
 }
 
+/** Сервер кутилмаганда тўхтаган бўлса, «running» ҳолатда қолиб кетган ишларни тиклаш (такрорий бажармасдан). */
+export function recoverInterrupted() {
+  const db = getDb();
+  const runs = db.prepare("SELECT id, steps FROM workflow_runs WHERE status = 'running'").all() as any[];
+  for (const r of runs) {
+    const steps = JSON.parse(r.steps).map((s: any) => s.status === 'running' ? { ...s, status: 'error', error: 'Сервер қайта ишга тушди — қадам якунланмади. «Хатодан давом эттириш» тугмасини босинг.' } : s);
+    db.prepare("UPDATE workflow_runs SET status = 'error', steps = ?, updated_at = ? WHERE id = ?").run(JSON.stringify(steps), now(), r.id);
+  }
+  const jobs = db.prepare("UPDATE job_runs SET status = 'error', detail = 'Сервер иш давомида тўхтаган — натижани текширинг (такрорий бажарилмайди).' WHERE status = 'running'").run();
+  if (runs.length || jobs.changes) log('recovered_after_restart', 'system', '', `workflows: ${runs.length}, jobs: ${jobs.changes}`);
+}
+
 export function createApp() {
   openDb();
   seed();
+  recoverInterrupted();
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 'loopback');

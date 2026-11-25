@@ -104,6 +104,9 @@ test('Obsidian vault: ёзиш, ташқи таҳрирни олиш, зидди
 
 test('қайта ишга туширгандан ва қайта киргандан кейин маълумотлар сақланган', async () => {
   const p = (await call('POST', '/projects', { name: 'Доимий лойиҳа ғўза' })).data;
+  // иш давомида узилиш: жараён ва режали иш «running»да қолиб кетган
+  const wfr = (await call('POST', '/workflows', { type: 'content', input: 'ғоя' })).data;
+  getDb().prepare("UPDATE workflow_runs SET status='running', steps=? WHERE id=?").run(JSON.stringify(wfr.steps.map((s: any, i: number) => ({ ...s, status: i === 0 ? 'running' : 'pending' }))), wfr.id);
   closeDb(); // сервер ўчди
   const { createApp } = await import('../server/app.ts');
   createApp(); // база қайта очилди
@@ -114,4 +117,8 @@ test('қайта ишга туширгандан ва қайта кирганд�
   assert.equal((await call('POST', '/auth/login', { password: 'parol12345' })).status, 200);
   const g = await call('GET', `/projects/${p.id}`);
   assert.equal(g.data.name, 'Доимий лойиҳа ғўза');
+  const rec = (await call('GET', `/workflows/${wfr.id}`)).data;
+  assert.equal(rec.status, 'error'); assert.match(rec.steps[0].error, /қайта ишга тушди/);
+  const resumed = (await call('POST', `/workflows/${wfr.id}/run`)).data;
+  assert.equal(resumed.status, 'done');
 });
