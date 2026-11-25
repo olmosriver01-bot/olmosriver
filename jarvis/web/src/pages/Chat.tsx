@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { get, post, put, del } from '../api';
+import { get, post, put, del, stream } from '../api';
 import { go } from '../App';
 import { t } from '../i18n';
-import { useLoad, useAction, Btn, Select, Area, Markdown, Modal, Alert, Empty, fmtDate, Input, Field } from '../ui';
+import { useToast, useLoad, useAction, Btn, Select, Area, Markdown, Modal, Alert, Empty, fmtDate, Input, Field } from '../ui';
 
 const SAVE_AS: [string, string][] = [['knowledge', 'Билим (06_KNOWLEDGE)'], ['prompt', 'Промпт (07_PROMPTS)'], ['content', 'Контент (04_CONTENT)'], ['decision', 'Қарор лойиҳаси (09_DECISIONS)'], ['sop', 'SOP (08_SOP)'], ['task', 'Вазифа']];
 
@@ -18,6 +18,7 @@ export function Chat({ id }: { id?: number }) {
   const [saveMsg, setSaveMsg] = useState<any>(null);
   const [cite, setCite] = useState<any>(null);
   const { run } = useAction();
+  const toast = useToast();
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -49,11 +50,17 @@ export function Chat({ id }: { id?: number }) {
     let c = conv;
     if (!c) { c = await run(() => post('/conversations', {})); if (!c) return; }
     const msg = text; setText(''); setSending(true);
-    setConv({ ...c, messages: [...(c.messages ?? []), { id: -1, role: 'user', content: msg, citations: [], meta: {} }] });
+    const base = { ...c, messages: [...(c.messages ?? []), { id: -1, role: 'user', content: msg, citations: [], meta: {} }] };
+    setConv(base);
+    let acc = '';
     try {
-      const r = await post(`/conversations/${c.id}/messages`, { text: msg });
-      setConv(r.conversation);
+      await stream(`/conversations/${c.id}/stream`, { text: msg }, (ev, data) => {
+        if (ev === 'delta') { acc += data.t; setConv({ ...base, messages: [...base.messages, { id: -2, role: 'assistant', content: acc, citations: [], meta: { streaming: true } }] }); }
+        else if (ev === 'done') setConv(data.conversation);
+        else if (ev === 'error') { toast(data.error, 'err'); if (data.conversation) setConv(data.conversation); }
+      });
     } catch (e: any) {
+      toast(e.message, 'err');
       const fresh = await get(`/conversations/${c.id}`).catch(() => null);
       if (fresh) setConv(fresh);
     } finally {
@@ -89,13 +96,13 @@ export function Chat({ id }: { id?: number }) {
         </> : <span className="muted small">{t('Лойиҳа, рол ва манбаларни суҳбат очилгач танлайсиз.')}</span>}
       </div>
       <div className="msgs">
-        {noProvider && <Alert kind="warn"><div className="row between"><span>{t('Провайдер уланмаган: JARVIS AI жавобини бера олмайди. Сохта жавоб кўрсатилмайди.')}</span><Btn sm onClick={() => go('settings')}>API калитини киритиш</Btn></div></Alert>}
+        {noProvider && <Alert kind="warn"><div className="row between"><span>{t('AI провайдер: уланиш кутилмоқда (API калити киритилмаган). JARVIS AI жавобини бера олмайди — сохта жавоб кўрсатилмайди. Лойиҳа, манба, хотира ва вазифалар ишлайверади.')}</span><Btn sm onClick={() => go('settings')}>API калитини киритиш</Btn></div></Alert>}
         {!conv?.messages?.length && <Empty><div className="stack" style={{ alignItems: 'center' }}>
           <div style={{ fontSize: 28 }}>✦</div><div>{t('JARVIS’га топшириқ беринг. Сақланган профилингиз ва танланган лойиҳа маълумотлари автоматик ҳисобга олинади.')}</div>
           <div className="xs dim">{t('Масалан: «Шу лойиҳа манбаларидан мижозлар эътирозларини топ» ёки «Бу ғояни Instagram пост қил».')}</div></div></Empty>}
         {conv?.messages?.map((m: any) => <div key={m.id} className={`msg ${m.role} ${m.meta?.error ? 'err' : ''}`}>
           <div className="bubble">{m.role === 'user' ? m.content : <Markdown text={m.content} onCite={(n) => setCite(m.citations.find((c: any) => c.n === n))} />}</div>
-          {m.role === 'assistant' && <div className="row xs dim" style={{ marginTop: 4 }}>
+          {m.role === 'assistant' && !m.meta?.streaming && <div className="row xs dim" style={{ marginTop: 4 }}>
             {m.meta?.mock && <span className="badge b-warn">MOCK — {t('ҳақиқий AI эмас')}</span>}
             {m.meta?.provider && !m.meta.mock && <span>{m.meta.provider} · {m.meta.model}{m.meta.costUsd != null ? ` · $${m.meta.costUsd.toFixed(4)}` : ''}</span>}
             {m.meta?.local && <span className="badge">{t('AI чақирилмади')}</span>}
@@ -105,7 +112,7 @@ export function Chat({ id }: { id?: number }) {
             {!m.meta?.error && <Btn sm kind="ghost" onClick={() => navigator.clipboard?.writeText(m.content)}>⧉</Btn>}
           </div>}
         </div>)}
-        {sending && <div className="msg"><div className="bubble muted">{t('JARVIS ўйламоқда…')}</div></div>}
+        {sending && !conv?.messages?.some((m: any) => m.meta?.streaming) && <div className="msg"><div className="bubble muted">{t('JARVIS ўйламоқда…')}</div></div>}
         <div ref={endRef} />
       </div>
       <div className="composer">

@@ -4,7 +4,7 @@ import { encrypt, decrypt } from './auth.ts';
 
 export type ProviderId = 'anthropic' | 'openai' | 'google' | 'mock';
 export type ChatMsg = { role: 'user' | 'assistant'; content: string };
-export type AiRequest = { system: string; messages: ChatMsg[]; model?: string; maxTokens?: number; kind?: string };
+export type AiRequest = { system: string; messages: ChatMsg[]; model?: string; maxTokens?: number; kind?: string; onDelta?: (text: string) => void };
 export type AiResult = { text: string; provider: ProviderId; model: string; inputTokens: number; outputTokens: number; costUsd: number | null; mock: boolean; note?: string };
 
 export const PROVIDERS: Record<Exclude<ProviderId, 'mock'>, { name: string; defaultModel: string; envKey: string; docs: string; keyHint: string }> = {
@@ -93,7 +93,7 @@ export function resolveProvider(p: ProviderId | null | undefined, soft = false):
   }
   if (mockEnabled()) return 'mock';
   if (soft) return null;
-  throw new HttpError(409, 'AI провайдер уланмаган. Созламалар → AI провайдерлар бўлимида API калитини киритинг.', 'no_provider');
+  throw new HttpError(409, 'AI провайдер уланмаган (уланиш кутилмоқда). Созламалар → AI провайдерлар бўлимида API калитини киритинг.', 'no_provider');
 }
 
 // ---- лимитлар ва харажат ----
@@ -146,9 +146,13 @@ async function callAnthropic(key: string, model: string, req: AiRequest, s: AiSe
   };
   const usesFallback = /^claude-(opus-5|fable-5|sonnet-5-5)/.test(model);
   try {
-    const r: any = usesFallback
-      ? await client.beta.messages.create({ ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' })
-      : await client.messages.create(params);
+    const full = usesFallback ? { ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' } : params;
+    let r: any;
+    if (req.onDelta) {
+      const stream: any = usesFallback ? client.beta.messages.stream(full) : client.messages.stream(full);
+      stream.on('text', (d: string) => req.onDelta!(d));
+      r = await stream.finalMessage();
+    } else r = usesFallback ? await client.beta.messages.create(full) : await client.messages.create(full);
     const text = r.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
     let note: string | undefined;
     if (r.stop_reason === 'refusal') note = 'Модел бу сўровни хавфсизлик сабабли рад этди.';
@@ -170,8 +174,56 @@ async function httpJson(provider: string, url: string, init: RequestInit, timeou
   return body;
 }
 
+/** SSE (text/event-stream) жавобини ўқиш; маълумот келмай қолса (idle timeout) тўхтатади. */
+async function sseRequest(provider: string, url: string, init: RequestInit, idleMs: number, onEvent: (data: any) => void) {
+  const ac = new AbortController();
+  let timer = setTimeout(() => ac.abort(), idleMs);
+  const bump = () => { clearTimeout(timer); timer = setTimeout(() => ac.abort(), idleMs); };
+  let res: Response;
+  try { res = await fetch(url, { ...init, signal: ac.signal }); }
+  catch (e: any) { clearTimeout(timer); throw friendly(provider, undefined, ac.signal.aborted ? 'timeout' : String(e?.message || e)); }
+  if (!res.ok) {
+    clearTimeout(timer);
+    const body: any = await res.json().catch(() => ({}));
+    throw friendly(provider, res.status, body?.error?.message || JSON.stringify(body).slice(0, 300));
+  }
+  const reader = res.body!.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bump();
+      buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.search(/\r?\n\r?\n/)) >= 0) {
+        const block = buf.slice(0, i); buf = buf.slice(i).replace(/^\r?\n\r?\n/, '');
+        const data = block.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trimStart()).join('\n');
+        if (!data || data === '[DONE]') continue;
+        try { onEvent(JSON.parse(data)); } catch (e) { if (e instanceof HttpError) throw e; }
+      }
+    }
+  } catch (e: any) {
+    if (e instanceof HttpError) throw e;
+    throw friendly(provider, undefined, ac.signal.aborted ? 'timeout' : String(e?.message || e));
+  } finally { clearTimeout(timer); }
+}
+
 async function callOpenAI(key: string, model: string, req: AiRequest, s: AiSettings) {
   // Responses API: POST /v1/responses
+  if (req.onDelta) {
+    let text = '', usage: any = {}, mdl = model, status = 'completed', incomplete = '';
+    await sseRequest('openai', `${openaiBase()}/responses`, {
+      method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({ model, instructions: req.system, input: req.messages.map((m) => ({ role: m.role, content: m.content })), max_output_tokens: req.maxTokens ?? s.maxOutputTokens, store: false, stream: true }),
+    }, s.timeoutMs, (ev) => {
+      if (ev.type === 'response.output_text.delta') { text += ev.delta; req.onDelta!(ev.delta); }
+      else if (ev.type === 'response.completed' || ev.type === 'response.incomplete') { usage = ev.response?.usage ?? {}; mdl = ev.response?.model ?? model; status = ev.response?.status ?? status; incomplete = ev.response?.incomplete_details?.reason ?? ''; }
+      else if (ev.type === 'error' || ev.type === 'response.failed') throw friendly('openai', undefined, ev.message || ev.response?.error?.message || 'stream error');
+    });
+    return { text, inputTokens: usage.input_tokens ?? 0, outputTokens: usage.output_tokens ?? 0, model: mdl, note: status === 'incomplete' ? `Жавоб тўлиқ эмас: ${incomplete}` : undefined };
+  }
   const body = await httpJson('openai', `${openaiBase()}/responses`, {
     method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
     body: JSON.stringify({ model, instructions: req.system, input: req.messages.map((m) => ({ role: m.role, content: m.content })), max_output_tokens: req.maxTokens ?? s.maxOutputTokens, store: false }),
@@ -183,6 +235,26 @@ async function callOpenAI(key: string, model: string, req: AiRequest, s: AiSetti
 }
 
 async function callGemini(key: string, model: string, req: AiRequest, s: AiSettings) {
+  const payload = JSON.stringify({
+    systemInstruction: { parts: [{ text: req.system }] },
+    contents: req.messages.map((m) => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })),
+    generationConfig: { maxOutputTokens: req.maxTokens ?? s.maxOutputTokens },
+  });
+  if (req.onDelta) {
+    let text = '', usage: any = {}, finish = '', block = '';
+    await sseRequest('google', `${geminiBase()}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`, {
+      method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': key }, body: payload,
+    }, s.timeoutMs, (ev) => {
+      const c = ev.candidates?.[0];
+      const d = (c?.content?.parts ?? []).filter((p: any) => !p.thought).map((p: any) => p.text ?? '').join('');
+      if (d) { text += d; req.onDelta!(d); }
+      if (c?.finishReason) finish = c.finishReason;
+      if (ev.usageMetadata) usage = ev.usageMetadata;
+      if (ev.promptFeedback?.blockReason) block = ev.promptFeedback.blockReason;
+    });
+    const note = block ? `Gemini жавоб бермади: ${block}` : finish && finish !== 'STOP' ? `Тугаш сабаби: ${finish}` : undefined;
+    return { text, inputTokens: usage.promptTokenCount ?? 0, outputTokens: usage.candidatesTokenCount ?? 0, model, note };
+  }
   const body = await httpJson('google', `${geminiBase()}/models/${encodeURIComponent(model)}:generateContent`, {
     method: 'POST', headers: { 'content-type': 'application/json', 'x-goog-api-key': key },
     body: JSON.stringify({
@@ -202,6 +274,11 @@ async function callGemini(key: string, model: string, req: AiRequest, s: AiSetti
 function callMock(req: AiRequest) {
   const last = req.messages[req.messages.length - 1]?.content ?? '';
   const cites = [...new Set(req.system.match(/\[S\d+\]/g) ?? [])].slice(0, 2).join(' ');
+  const r = mockText(last, cites);
+  if (req.onDelta) for (const part of r.text.match(/.{1,24}/gs) ?? []) req.onDelta(part);
+  return r;
+}
+function mockText(last: string, cites: string) {
   return { text: `⚠️ MOCK ЖАВОБ (тест режими, ҳақиқий AI эмас).\nСаволингиз: «${last.slice(0, 200)}»${cites ? `\nМанба белгилари: ${cites}` : ''}`, inputTokens: 0, outputTokens: 0, model: 'mock', note: 'Тест учун сохта провайдер' };
 }
 

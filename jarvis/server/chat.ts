@@ -107,7 +107,7 @@ export function buildContext(conv: any, question: string) {
   return { system, history, hits, summary };
 }
 
-export async function sendMessage(convId: number, text: string) {
+export async function sendMessage(convId: number, text: string, onDelta?: (t: string) => void) {
   const conv = getConversation(convId);
   const question = String(text ?? '').normalize('NFC').trim();
   if (!question) throw new HttpError(400, 'Хабар бўш.');
@@ -121,7 +121,7 @@ export async function sendMessage(convId: number, text: string) {
     return { message: { id, role: 'assistant' }, conversation: getConversation(convId) };
   }
   try {
-    const r = await complete({ system: ctx.system, messages: ctx.history, model: conv.model || undefined, kind: 'chat' }, conv.provider);
+    const r = await complete({ system: ctx.system, messages: ctx.history, model: conv.model || undefined, kind: 'chat', onDelta }, conv.provider);
     const content = r.text + (r.note ? `\n\n_(${r.note})_` : '');
     const citations = citationsFrom(r.text, ctx.hits);
     const id = addMessage(convId, 'assistant', content, citations, { provider: r.provider, model: r.model, mock: r.mock, inputTokens: r.inputTokens, outputTokens: r.outputTokens, costUsd: r.costUsd, sent: ctx.summary });

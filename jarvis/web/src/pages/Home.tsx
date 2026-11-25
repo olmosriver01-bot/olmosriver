@@ -24,6 +24,12 @@ export function Home() {
       <div className="card"><div className="muted small">{t('Охирги backup')}</div><div className="small" style={{ marginTop: 6 }}>{d.integrations.backups[0]?.name.slice(7, 26) ?? t('ҳали йўқ')}</div></div>
     </div>
 
+    {(() => { const done = d.checklist.filter((c: any) => c.done).length; const pct = Math.round((done / d.checklist.length) * 100); return pct < 100 && <div className="card" style={{ marginBottom: 14 }}>
+      <div className="row between"><h2 style={{ margin: 0 }}>{t('Тизим тайёрлиги (PDF checklist)')}</h2><b>{pct} / 100</b></div>
+      <div className="progress" style={{ margin: '10px 0' }}><div style={{ width: `${pct}%` }} /></div>
+      <div className="grid g3">{d.checklist.map((c: any) => <label key={c.label} className="check small" onClick={() => !c.done && go(c.link)} style={{ opacity: c.done ? .6 : 1 }}><input type="checkbox" checked={c.done} readOnly />{t(c.label)}</label>)}</div>
+    </div>; })()}
+
     <div className="grid g2">
       <div className="card"><div className="row between"><h2>{t('Фаол лойиҳалар')}</h2><Btn sm onClick={() => go('projects')}>Барчаси</Btn></div>
         <div className="stack">{d.projects.map((p: any) => <div key={p.id} className="item" onClick={() => go(`projects/${p.id}`)}>
@@ -49,7 +55,7 @@ export function Home() {
       <div className="card"><h2>{t('Интеграциялар ҳолати')}</h2>
         <table className="tbl"><tbody>
           {ai.providers.map((p: any) => <tr key={p.id}><td><span className={`dot ${p.connected ? 'on' : 'off'}`} /> {p.name}</td>
-            <td className="small">{p.connected ? <>{t('Уланган')} · <span className="mono">{p.model}</span>{p.lastCheck ? (p.lastCheck.ok ? <span className="badge b-ok">{t('текширилган')}</span> : <span className="badge b-err">{t('хато')}</span>) : <span className="badge b-warn">{t('текширилмаган')}</span>}</> : <span className="muted">{t('Провайдер уланмаган')}</span>}</td></tr>)}
+            <td className="small">{p.connected ? <>{t('Уланган')} · <span className="mono">{p.model}</span>{p.lastCheck ? (p.lastCheck.ok ? <span className="badge b-ok">{t('текширилган')}</span> : <span className="badge b-err">{t('хато')}</span>) : <span className="badge b-warn">{t('текширилмаган')}</span>}</> : <span className="badge b-warn">{t('Уланиш кутилмоқда — API калити йўқ')}</span>}</td></tr>)}
           {ai.mock && <tr><td>Mock</td><td className="small"><span className="badge b-warn">{t('ТЕСТ режими — сохта жавоблар')}</span></td></tr>}
           <tr><td><span className={`dot ${d.integrations.vault.path ? 'on' : ''}`} /> Obsidian vault</td><td className="small">{d.integrations.vault.path ? <><span className="mono">{d.integrations.vault.path}</span>{d.integrations.vault.conflicts > 0 && <span className="badge b-err">{d.integrations.vault.conflicts} {t('зиддият')}</span>}</> : <span className="muted">{t('Уланмаган (Markdown экспорт/импорт ишлайди)')}</span>}</td></tr>
           <tr><td><span className="dot on" /> {t('Режалаштирувчи')}</td><td className="small">Asia/Tashkent · {t('охирги текширув')}: {fmtDate(d.integrations.scheduler.lastTick)}</td></tr>

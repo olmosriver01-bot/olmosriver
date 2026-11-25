@@ -30,7 +30,7 @@ function Providers() {
       options={[['', 'Автоматик (биринчи уланган)'], ...data.providers.map((p: any) => [p.id, p.name] as [string, string]), ...(data.mock ? [['mock', 'MOCK (тест)'] as [string, string]] : [])]} /></Field>
     {data.providers.map((p: any) => <div key={p.id} className="card stack">
       <div className="row between"><h2 style={{ margin: 0 }}><span className={`dot ${p.connected ? 'on' : 'off'}`} /> {p.name}</h2>
-        <span className="small">{p.connected ? <>{t('Уланган')} ({p.keySource === 'env' ? '.env' : t('созламалар')}) · <span className="mono">{p.keyPreview}</span></> : <span className="muted">{t('Провайдер уланмаган')}</span>}</span></div>
+        <span className="small">{p.connected ? <>{t('Уланган')} ({p.keySource === 'env' ? '.env' : t('созламалар')}) · <span className="mono">{p.keyPreview}</span></> : <span className="badge b-warn">{t('Уланиш кутилмоқда — API калити йўқ')}</span>}</span></div>
       <div className="grid g2">
         <Field label="API калити"><div className="row" style={{ flexWrap: 'nowrap' }}><Input type="password" autoComplete="off" placeholder={p.keyHint} value={keys[p.id] ?? ''} onChange={(e) => setKeys({ ...keys, [p.id]: e.target.value })} />
           <Btn disabled={busy || !keys[p.id]} onClick={async () => { await run(() => post('/settings/ai/key', { provider: p.id, key: keys[p.id] }), 'Калит сақланди'); setKeys({ ...keys, [p.id]: '' }); reload(); }}>Сақлаш</Btn>

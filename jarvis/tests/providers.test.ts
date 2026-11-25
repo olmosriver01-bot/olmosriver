@@ -16,6 +16,25 @@ const fake = http.createServer((req, res) => {
     if (mode === '401') return send(401, { error: { message: 'Invalid API key' } });
     if (mode === '429') return send(429, { error: { message: 'Rate limit' } });
     if (mode === '404') return send(404, { error: { message: 'model not found' } });
+    const sse = (events: [string | null, any][]) => { res.writeHead(200, { 'content-type': 'text/event-stream' }); for (const [e, d] of events) res.write(`${e ? `event: ${e}\n` : ''}data: ${JSON.stringify(d)}\n\n`); res.end(); };
+    const b0 = body ? JSON.parse(body) : {};
+    if (req.url?.startsWith('/v1/messages') && b0.stream) return sse([
+      ['message_start', { type: 'message_start', message: { id: 'msg_s', type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } }],
+      ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Claude ' } }],
+      ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'оқими' } }],
+      ['content_block_stop', { type: 'content_block_stop', index: 0 }],
+      ['message_delta', { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 5 } }],
+      ['message_stop', { type: 'message_stop' }],
+    ]);
+    if (req.url?.includes('/responses') && b0.stream) return sse([
+      [null, { type: 'response.output_text.delta', delta: 'OpenAI ' }], [null, { type: 'response.output_text.delta', delta: 'оқими' }],
+      [null, { type: 'response.completed', response: { model: 'gpt-test', status: 'completed', usage: { input_tokens: 7, output_tokens: 3 } } }],
+    ]);
+    if (req.url?.includes(':streamGenerateContent')) return sse([
+      [null, { candidates: [{ content: { parts: [{ text: 'Gemini ' }] } }] }],
+      [null, { candidates: [{ content: { parts: [{ text: 'оқими' }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 4, candidatesTokenCount: 2 } }],
+    ]);
     if (req.url?.startsWith('/v1/messages')) {
       const b = JSON.parse(body);
       assert.equal(b.model, 'claude-opus-5-5'); assert.equal(b.fallbacks, 'default');
@@ -100,6 +119,37 @@ test('Anthropic SDK орқали сўров (fallbacks: default), нарх жа�
   assert.equal(m.meta.costUsd, (1000 * 4 + 100 * 20) / 1e6);
 });
 
+async function streamCall(convId: number, text: string) {
+  const res = await app.call('POST', `/conversations/${convId}/stream`, { text }, true);
+  const raw = await res.text();
+  const events = raw.split('\n\n').filter((b: string) => b.startsWith('event:')).map((b: string) => { const [e, d] = b.split('\n'); return { event: e.slice(7), data: JSON.parse(d.slice(6)) }; });
+  return events;
+}
+
+test('оқимли жавоб (SSE): Anthropic, OpenAI ва Gemini бўлаклари келади ва суҳбатга сақланади', async () => {
+  mode = 'ok';
+  for (const [prov, expected] of [['anthropic', 'Claude оқими'], ['openai', 'OpenAI оқими'], ['google', 'Gemini оқими']]) {
+    const c = (await call('POST', '/conversations', { source_mode: 'off', provider: prov })).data;
+    const ev = await streamCall(c.id, 'Салом');
+    const deltas = ev.filter((e: any) => e.event === 'delta').map((e: any) => e.data.t).join('');
+    assert.equal(deltas, expected, prov + ' ' + JSON.stringify(ev));
+    const done = ev.find((e: any) => e.event === 'done');
+    assert.ok(done, prov);
+    const m = done.data.conversation.messages.at(-1);
+    assert.equal(m.content, expected); assert.equal(m.meta.provider, prov); assert.ok(m.meta.outputTokens > 0);
+    assert.equal((await call('GET', `/conversations/${c.id}`)).data.messages.at(-1).content, expected);
+  }
+});
+
+test('оқимли жавобда провайдер хатоси error ҳодисаси билан қайтади', async () => {
+  mode = '401';
+  const c = (await call('POST', '/conversations', { source_mode: 'off', provider: 'openai' })).data;
+  const ev = await streamCall(c.id, 'x');
+  const err = ev.find((e: any) => e.event === 'error');
+  assert.match(err.data.error, /калити нотўғри/);
+  mode = 'ok';
+});
+
 test('провайдер хатолари тушунарли кўрсатилади (401, 429, 404, вақт тугаши)', async () => {
   const c = (await call('POST', '/conversations', { source_mode: 'off', provider: 'openai' })).data;
   const cases: [string, RegExp][] = [['401', /калити нотўғри/], ['429', /лимит/], ['404', /модел топилмади/]];
@@ -109,7 +159,7 @@ test('провайдер хатолари тушунарли кўрсатила�
     assert.match(r.data.error, re, m);
   }
   mode = 'timeout';
-  await call('PUT', '/settings/ai', { timeoutMs: 5000 });
+  await call('PUT', '/settings/ai', { timeoutMs: 5000, perMinuteLimit: 100 });
   const r = await call('POST', `/conversations/${c.id}/messages`, { text: 'x' });
   assert.equal(r.status, 504); assert.match(r.data.error, /вақти тугади/);
   mode = 'ok';

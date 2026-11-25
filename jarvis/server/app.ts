@@ -25,6 +25,28 @@ const id = (req: Request, k = 'id') => { const n = Number(req.params[k]); if (!N
 /** multer латин-1 сифатида ўқийди — ўзбекча/кирилл номларни UTF-8 га қайтарамиз. */
 const fileName = (f: Express.Multer.File) => { const n = Buffer.from(f.originalname, 'latin1').toString('utf8'); return n.includes('�') ? f.originalname : n; };
 
+/** PDF 13-бетдаги «Тезкор checklist» — ҳақиқий маълумотлардан ҳисобланади. */
+function checklist() {
+  const db = getDb();
+  const one = (sql: string) => !!db.prepare(sql).get();
+  const n = (sql: string) => (db.prepare(sql).get() as any).n as number;
+  const items: [string, boolean, string][] = [
+    ['JARVIS хотира тузилмаси (00_INBOX … 10_ARCHIVE)', true, 'memory'],
+    ['Obsidian vault уланди ёки Markdown экспорт қилинди', !!getSetting('vault.path', null) || one("SELECT 1 FROM audit_log WHERE action='markdown_export'"), 'memory/io'],
+    ['Иш профилингиз ёзилди', one("SELECT 1 FROM notes WHERE system_key='identity.profile' AND deleted_at IS NULL"), 'memory/profile'],
+    ['Jarvis operating manual сақланди', one("SELECT 1 FROM notes WHERE system_key='identity.manual' AND deleted_at IS NULL"), 'memory/profile'],
+    ['AI провайдер уланди (API калити)', !!ai.resolveProvider(null, true) && ai.resolveProvider(null, true) !== 'mock', 'settings'],
+    ['1 та лойиҳа манбалар билан синалди', one("SELECT 1 FROM documents WHERE project_id IS NOT NULL AND status='ready' AND deleted_at IS NULL") && one("SELECT 1 FROM messages WHERE citations LIKE '%\"cited\":true%'"), 'sources'],
+    ['Камида 3 та AI рол', n('SELECT COUNT(*) n FROM roles WHERE deleted_at IS NULL') >= 3, 'roles'],
+    ['Биринчи иш жараёни якунланди', one("SELECT 1 FROM workflow_runs WHERE status='done' AND deleted_at IS NULL"), 'workflows'],
+    ['Биринчи такрорий иш автоматлаштирилди', one("SELECT 1 FROM recurring WHERE kind='task' AND enabled=1 AND deleted_at IS NULL"), 'tasks'],
+    ['5 та яхши промпт сақланди', n("SELECT COUNT(*) n FROM notes WHERE folder='07_PROMPTS' AND deleted_at IS NULL") >= 5, 'prompts'],
+    ['Камида 3 та SOP ёзилди', n("SELECT COUNT(*) n FROM notes WHERE folder='08_SOP' AND deleted_at IS NULL") >= 3, 'sop'],
+    ['Ҳафталик AI аудит белгиланди', one("SELECT 1 FROM recurring WHERE kind='audit' AND enabled=1 AND deleted_at IS NULL"), 'tasks'],
+  ];
+  return items.map(([label, done, link]) => ({ label, done, link }));
+}
+
 export function createApp() {
   openDb();
   seed();
@@ -82,6 +104,7 @@ export function createApp() {
         scheduler: tasks.schedulerInfo(), backups: backup.listBackups().slice(0, 1),
       },
       profileReady: !!db.prepare("SELECT 1 FROM notes WHERE system_key='identity.profile' AND deleted_at IS NULL").get(),
+      checklist: checklist(),
     };
   }));
 
@@ -223,6 +246,23 @@ export function createApp() {
     return { summary: c.summary, system: c.system };
   }));
   api.post('/conversations/:id/messages', h((req) => chat.sendMessage(id(req), req.body.text)));
+  // Оқимли жавоб (SSE): event delta → матн бўлаклари, done → тўлиқ суҳбат, error → тушунарли хато
+  api.post('/conversations/:id/stream', async (req, res) => {
+    let cid: number;
+    try { cid = id(req); chat.getConversation(cid); } catch (e: any) { return res.status(e.status ?? 400).json({ error: e.message }); }
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+    const send = (event: string, data: any) => res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    const ping = setInterval(() => res.write(': ping\n\n'), 15000);
+    try {
+      const r = await chat.sendMessage(cid, req.body.text, (t) => send('delta', { t }));
+      send('done', r);
+    } catch (e: any) {
+      send('error', { error: e instanceof HttpError ? e.message : 'Ички хато юз берди.', code: e.code ?? 'error', conversation: (() => { try { return chat.getConversation(cid); } catch { return null; } })() });
+    } finally { clearInterval(ping); res.end(); }
+  });
   api.post('/messages/:id/save', h(async (req) => {
     const m = getDb().prepare('SELECT * FROM messages WHERE id = ?').get(id(req)) as any;
     if (!m) throw new HttpError(404, 'Хабар топилмади.');
