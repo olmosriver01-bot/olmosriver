@@ -130,3 +130,12 @@ test('автоматик backup Тошкент куни бўйича: UTC сан
   assert.equal(await maybeAutoBackup(new Date('2026-11-27T18:59:00Z')), null); // 27-ноябрь 23:59 Тошкент
   // натижада фақат иккита нусха олинди (26 ва 27-ноябр Тошкент кунлари учун)
 });
+
+test('қўлда қўйилган суҳбат номи биринчи хабар билан алмашмайди', async () => {
+  const c = (await call('POST', '/conversations', { title: 'Синов суҳбати', source_mode: 'off' })).data;
+  await call('POST', `/conversations/${c.id}/messages`, { text: 'Салом' });
+  assert.equal((await call('GET', `/conversations/${c.id}`)).data.title, 'Синов суҳбати');
+  const d = (await call('POST', '/conversations', { source_mode: 'off' })).data;
+  await call('POST', `/conversations/${d.id}/messages`, { text: 'Бугунги режа' });
+  assert.equal((await call('GET', `/conversations/${d.id}`)).data.title, 'Бугунги режа');
+});

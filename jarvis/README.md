@@ -24,8 +24,11 @@ npm start               # = vite build + сервер
 **Очиш манзили:** <http://127.0.0.1:3333>. Биринчи очилишда кириш паролини ўрнатасиз.
 
 ### Mac’да доимий ишлатиш (тавсия)
+Репозиторийни **уй папкасига** олинг (Documents/Desktop/Downloads эмас — macOS фон хизматига у ерга киришни чеклайди):
 ```bash
-cd jarvis
+cd ~
+git clone --branch claude/jarvis-personal-ai-nwzj38 https://github.com/olmosriver01-bot/olmosriver.git
+cd ~/olmosriver/jarvis
 ./install-macos.sh            # ўрнатади, ишга туширади, браузерни очади; Mac ёқилганда ўзи ишга тушади
 ./install-macos.sh uninstall  # автоишга туширишни олиб ташлаш (маълумотлар қолади)
 ```

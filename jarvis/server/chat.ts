@@ -124,7 +124,8 @@ async function sendMessageInner(convId: number, text: string, onDelta?: (t: stri
   if (question.length > 20000) throw new HttpError(400, 'Хабар жуда узун (20 000 белгигача).');
   const ctx = buildContext(conv, question);
   addMessage(convId, 'user', question);
-  if (conv.messages.length === 0) getDb().prepare('UPDATE conversations SET title = ? WHERE id = ?').run(question.slice(0, 60), convId);
+  // Сарлавҳа фақат сукут ҳолатида бўлса биринчи хабардан олинади (қўлда қўйилган ном сақланади)
+  if (conv.messages.length === 0 && (!conv.title || conv.title === 'Янги суҳбат')) getDb().prepare('UPDATE conversations SET title = ? WHERE id = ?').run(question.slice(0, 60), convId);
 
   if (conv.source_mode === 'strict' && ctx.hits.length === 0) {
     const id = addMessage(convId, 'assistant', `${NOT_FOUND}\n\nТанланган лойиҳа манбаларида бу савол бўйича мос парча йўқ. AI чақирилмади.`, [], { local: true, notFound: true });
