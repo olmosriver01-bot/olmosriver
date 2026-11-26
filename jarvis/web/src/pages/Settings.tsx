@@ -40,7 +40,7 @@ function Providers() {
           <datalist id={`m-${p.id}`}>{(check[p.id]?.models ?? []).map((m: string) => <option key={m} value={m} />)}</datalist>
           <Btn disabled={busy || models[p.id] === p.model} onClick={async () => { await run(() => put('/settings/ai', { models: { [p.id]: models[p.id] } }), 'Сақланди'); reload(); }}>Сақлаш</Btn></div></Field>
       </div>
-      <div className="row"><Btn disabled={busy || !p.connected} onClick={async () => { const r = await run(() => post('/settings/ai/check', { provider: p.id })); if (r) setCheck({ ...check, [p.id]: r }); reload(); }}>{t('Калитни ҳақиқий API орқали текшириш')}</Btn>
+      <div className="row"><Btn disabled={busy || !p.connected} onClick={async () => { const r = await run(() => post('/settings/ai/check', { provider: p.id }), 'Калит ишлаяпти'); if (r) { setCheck({ ...check, [p.id]: r }); if (r.autoSelected) alert(`${t('Сукут модел ҳисобингизда йўқ эди — автоматик танланди')}: ${r.model}`); } reload(); }}>{t('Калитни ҳақиқий API орқали текшириш')}</Btn>
         <a className="small" href={p.docs} target="_blank" rel="noopener noreferrer">{t('Расмий ҳужжат')} ↗</a>
         {p.lastCheck && <span className={`badge ${p.lastCheck.ok ? 'b-ok' : 'b-err'}`}>{p.lastCheck.ok ? `${t('Ишлайди')} · ${p.lastCheck.modelCount} ${t('модел')}${p.lastCheck.modelAvailable ? '' : ` · ⚠️ ${p.lastCheck.model} ${t('рўйхатда йўқ')}`}` : p.lastCheck.error} · {fmtDate(p.lastCheck.at)}</span>}</div>
     </div>)}

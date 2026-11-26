@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import AdmZip from 'adm-zip';
 import Database from 'better-sqlite3';
-import { getDb, closeDb, openDb, migrate, DATA_DIR, UPLOADS_DIR, BACKUPS_DIR, DB_FILE, now, HttpError, log } from './db.ts';
+import { getSetting, setSetting, tashkentParts, getDb, closeDb, openDb, migrate, DATA_DIR, UPLOADS_DIR, BACKUPS_DIR, DB_FILE, now, HttpError, log } from './db.ts';
 
 /** Фонда ишлаётган ишлар (OCR, AI жараён, оқимли чат) — тиклаш пайтида эски ID’лар билан янги базага ёзмаслиги учун. */
 const busyChecks: (() => string | null)[] = [];
@@ -24,6 +24,18 @@ export async function createBackup(label = 'manual') {
   pruneBackups();
   return { name, size: fs.statSync(path.join(BACKUPS_DIR, name)).size };
 }
+/**
+ * Кунлик автоматик backup: Asia/Tashkent санаси бўйича кунига бир марта.
+ * UTC санаси алмашса ҳам (Тошкентда 05:00), ўша Тошкент куни учун иккинчи нусха олинмайди.
+ */
+export async function maybeAutoBackup(at = new Date()): Promise<string | null> {
+  const today = tashkentParts(at).date;
+  if (getSetting<string | null>('backup.lastAutoDate', null) === today) return null;
+  setSetting('backup.lastAutoDate', today); // аввал белгиланади — параллел tick такрорламайди
+  try { return (await createBackup('auto')).name; }
+  catch (e: any) { setSetting('backup.lastAutoDate', null); log('backup_error', 'backup', '', e.message); throw e; }
+}
+
 export function listBackups() {
   if (!fs.existsSync(BACKUPS_DIR)) return [];
   return fs.readdirSync(BACKUPS_DIR).filter((f) => /^jarvis-.*\.zip$/.test(f)).sort().reverse()

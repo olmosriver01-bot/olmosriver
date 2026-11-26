@@ -112,3 +112,21 @@ test('импорт: бошқа ёзувга тегишли jarvis_id мавжу�
   assert.equal(r.created, 1); assert.equal(r.updated, 0);
   assert.equal((await call('GET', `/notes/${n.id}`)).data.body, 'асл');
 });
+
+test('автоматик backup Тошкент куни бўйича: UTC санаси алмашса ҳам бир кунга фақат битта нусха', async () => {
+  const { maybeAutoBackup, listBackups } = await import('../server/backup.ts');
+  const { setSetting } = await import('../server/db.ts');
+  setSetting('backup.lastAutoDate', null);
+  void listBackups;
+  // 26-ноябрь 23:30 Тошкент (18:30 UTC) — 26-ноябр учун биринчи нусха
+  assert.ok(await maybeAutoBackup(new Date('2026-11-26T18:30:00Z')));
+  assert.equal(await maybeAutoBackup(new Date('2026-11-26T18:59:00Z')), null);
+  // 27-ноябрь 00:30 Тошкент (UTC ҳали 26-ноябр) — янги Тошкент куни: битта нусха
+  assert.ok(await maybeAutoBackup(new Date('2026-11-26T19:30:00Z')));
+  // UTC санаси 27-ноябрга ўтди (Тошкентда 05:10), Тошкент куни ўша — иккинчи нусха олинмайди
+  assert.equal(await maybeAutoBackup(new Date('2026-11-27T00:10:00Z')), null);
+  // ҳар 30 сонияда tick — ҳеч бири нусха олмайди
+  for (let i = 0; i < 40; i++) assert.equal(await maybeAutoBackup(new Date(Date.parse('2026-11-27T00:10:00Z') + i * 30000)), null);
+  assert.equal(await maybeAutoBackup(new Date('2026-11-27T18:59:00Z')), null); // 27-ноябрь 23:59 Тошкент
+  // натижада фақат иккита нусха олинди (26 ва 27-ноябр Тошкент кунлари учун)
+});

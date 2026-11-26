@@ -35,9 +35,12 @@ const fake = http.createServer((req, res) => {
       [null, { candidates: [{ content: { parts: [{ text: 'Gemini ' }] } }] }],
       [null, { candidates: [{ content: { parts: [{ text: 'оқими' }] }, finishReason: 'STOP' }], usageMetadata: { promptTokenCount: 4, candidatesTokenCount: 2 } }],
     ]);
+    if (req.url?.startsWith('/v1/beta-models')) return send(200, {});
+    if (req.url?.startsWith('/v1beta/models?')) return send(200, { models: [{ name: 'models/gemini-9.0-flash', supportedGenerationMethods: ['generateContent'] }, { name: 'models/text-embedding-9', supportedGenerationMethods: ['embedContent'] }] });
+    if (req.url?.startsWith('/v1/messages') && mode === 'no-fallback-beta' && JSON.parse(body).fallbacks) return send(400, { type: 'error', error: { type: 'invalid_request_error', message: 'fallbacks: this beta is not enabled for your organization' } });
     if (req.url?.startsWith('/v1/messages')) {
       const b = JSON.parse(body);
-      assert.equal(b.model, 'claude-opus-5-5'); assert.equal(b.fallbacks, 'default');
+      assert.equal(b.model, 'claude-opus-5-5'); if (mode !== 'no-fallback-beta') assert.equal(b.fallbacks, 'default');
       return send(200, { id: 'msg_1', type: 'message', role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Claude жавоби' }], stop_reason: 'end_turn', usage: { input_tokens: 1000, output_tokens: 100 } });
     }
     if (req.url?.startsWith('/v1/models')) return send(200, { data: [{ id: 'gpt-test' }] });
@@ -150,7 +153,24 @@ test('оқимли жавобда провайдер хатоси error ҳоди
   mode = 'ok';
 });
 
+test('Anthropic: ҳисобда fallback beta’си бўлмаса оддий сўровга қайтади', async () => {
+  mode = 'no-fallback-beta';
+  const c = (await call('POST', '/conversations', { source_mode: 'off', provider: 'anthropic' })).data;
+  const r = await call('POST', `/conversations/${c.id}/messages`, { text: 'Салом' });
+  assert.equal(r.status, 200, JSON.stringify(r.data));
+  assert.equal(r.data.conversation.messages.at(-1).content, 'Claude жавоби');
+  mode = 'ok';
+});
+
+test('Текшириш: сукут модел ҳисобда бўлмаса, мавжуд мос модел автоматик танланади', async () => {
+  const r = (await call('POST', '/settings/ai/check', { provider: 'google' })).data;
+  assert.equal(r.autoSelected, true); assert.equal(r.model, 'gemini-9.0-flash');
+  const st = (await call('GET', '/settings/ai')).data;
+  assert.equal(st.providers.find((p: any) => p.id === 'google').model, 'gemini-9.0-flash');
+});
+
 test('провайдер хатолари тушунарли кўрсатилади (401, 429, 404, вақт тугаши)', async () => {
+  await call('PUT', '/settings/ai', { perMinuteLimit: 100 });
   const c = (await call('POST', '/conversations', { source_mode: 'off', provider: 'openai' })).data;
   const cases: [string, RegExp][] = [['401', /калити нотўғри/], ['429', /лимит/], ['404', /модел топилмади/]];
   for (const [m, re] of cases) {

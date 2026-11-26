@@ -146,13 +146,22 @@ async function callAnthropic(key: string, model: string, req: AiRequest, s: AiSe
   };
   const usesFallback = /^claude-(opus-5|fable-5|sonnet-5-5)/.test(model);
   try {
-    const full = usesFallback ? { ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' } : params;
+    const run = async (withFallback: boolean) => {
+      const full = withFallback ? { ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' } : params;
+      if (req.onDelta) {
+        const stream: any = withFallback ? client.beta.messages.stream(full) : client.messages.stream(full);
+        stream.on('text', (d: string) => req.onDelta!(d));
+        return stream.finalMessage();
+      }
+      return withFallback ? client.beta.messages.create(full) : client.messages.create(full);
+    };
     let r: any;
-    if (req.onDelta) {
-      const stream: any = usesFallback ? client.beta.messages.stream(full) : client.messages.stream(full);
-      stream.on('text', (d: string) => req.onDelta!(d));
-      r = await stream.finalMessage();
-    } else r = usesFallback ? await client.beta.messages.create(full) : await client.messages.create(full);
+    try { r = await run(usesFallback); }
+    catch (e: any) {
+      // Ҳисобда server-side fallback beta’си бўлмаса — оддий сўров билан қайта уриниш
+      if (usesFallback && e instanceof Anthropic.BadRequestError && /fallback|beta/i.test(e.message)) r = await run(false);
+      else throw e;
+    }
     const text = r.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('');
     let note: string | undefined;
     if (r.stop_reason === 'refusal') note = 'Модел бу сўровни хавфсизлик сабабли рад этди.';
@@ -306,6 +315,23 @@ export async function complete(req: AiRequest, providerPref?: ProviderId | null)
   }
 }
 
+/** Ҳисобда мавжуд моделлардан умумий чат учун мосини танлаш (янги версиялар олдин). */
+export function pickModel(p: ProviderId, models: string[]): string | null {
+  const ver = (id: string) => (id.match(/\d+(?:[.-]\d+)*/g) ?? []).join('.').split(/[.-]/).map(Number);
+  const newestFirst = (a: string, b: string) => { const x = ver(a), y = ver(b); for (let i = 0; i < Math.max(x.length, y.length); i++) { const d = (y[i] ?? 0) - (x[i] ?? 0); if (d) return d; } return a.localeCompare(b); };
+  const bad = /(embed|tts|audio|realtime|image|vision|transcribe|search|moderation|instruct|codex|mini-tts|whisper|dall|computer|robotics|live|native-audio|lite|nano|preview|exp|-\d{4}-\d{2}-\d{2}|\d{8})/i;
+  const pools: Record<string, RegExp[]> = {
+    anthropic: [/^claude-opus/, /^claude-sonnet/, /^claude-/],
+    openai: [/^gpt-\d/, /^o\d/],
+    google: [/^gemini-[\d.]+-(pro|flash)$/, /^gemini-/],
+  };
+  for (const re of pools[p] ?? []) {
+    const c = models.filter((m) => re.test(m) && !bad.test(m)).sort(newestFirst);
+    if (c.length) return c[0];
+  }
+  return null;
+}
+
 /** Калит ва моделни ҳақиқий API орқали текшириш (моделлар рўйхатини олиш). */
 export async function checkProvider(p: ProviderId) {
   const key = getKey(p);
@@ -327,8 +353,15 @@ export async function checkProvider(p: ProviderId) {
     setSetting(`check.${p}`, { ok: false, at: now(), error: err.message });
     throw err;
   }
-  const model = aiSettings().models[p] || PROVIDERS[p as keyof typeof PROVIDERS].defaultModel;
-  const res = { ok: true, at: now(), modelCount: models.length, modelAvailable: models.includes(model), model };
+  const custom = aiSettings().models[p];
+  let model = custom || PROVIDERS[p as keyof typeof PROVIDERS].defaultModel;
+  let autoSelected = false;
+  // Фойдаланувчи модел танламаган ва сукут модел ҳисобда йўқ бўлса — мавжудларидан мосини танлаймиз
+  if (!custom && models.length && !models.includes(model)) {
+    const pick = pickModel(p, models);
+    if (pick) { saveAiSettings({ models: { [p]: pick } }); model = pick; autoSelected = true; }
+  }
+  const res = { ok: true, at: now(), modelCount: models.length, modelAvailable: models.includes(model), model, autoSelected };
   setSetting(`check.${p}`, res);
   return { ...res, models: models.slice(0, 200) };
 }
